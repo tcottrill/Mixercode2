@@ -28,7 +28,7 @@ Requires Visual Studio 2022 and the Xaudio2, version 2.9 Microsoft.XAudio2.Redis
 
 How to install the NuGet package:<br/>
 https://learn.microsoft.com/en-us/windows/win32/xaudio2/xaudio2-redistributable<br/>
-Edit: It apears you can also just go to nuget and hit "restore" since I left the package file in the root.  <br/>
+Edit: It appears you can also just go to nuget and hit "restore" since I left the package file in the root.  <br/>
 
 To use: <br/>
 Copy the files from the included demo and use mixer_init() with your target frequency and framerate. <br/>
