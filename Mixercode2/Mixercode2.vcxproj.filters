@@ -60,9 +60,6 @@
     <ClInclude Include="framework.h">
       <Filter>Source Files</Filter>
     </ClInclude>
-    <ClInclude Include="core\colordefs.h">
-      <Filter>Source Files\core</Filter>
-    </ClInclude>
     <ClInclude Include="core\fileio.h">
       <Filter>Source Files\core</Filter>
     </ClInclude>

@@ -130,6 +130,10 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	{
 		wrlog("SetCurrentDirectory failed (%d)\n", GetLastError());
 	}
+	else
+	{
+		wrlog("SetCurrentDirectory completed: %s",temppath.c_str());
+	}
 
 	///////////////// Initialize everything here //////////////////////////////
 	LogOpen("testlog.txt");
@@ -208,7 +212,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 			Font_Print(10, SCREEN_H - 450, "Sample 6: playing %d", sample_playing(6));
 			Font_Print(10, SCREEN_H - 500, "Sample 7: playing %d", sample_playing(7));
 
-			Font_Print(10, SCREEN_H - 550, "Sample 4 VOL: playing %i",b);
+			Font_Print(50, SCREEN_H - 550, "Press 0 through 7 to play a sample");
 			
 
 			if (KeyCheck(KEY_UP)) {
