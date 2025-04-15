@@ -519,7 +519,7 @@ int sample_get_volume_mixer(int chanid)
 
 void stream_start(int chanid, int stream, int bits, int frame_rate)
 {
-	int stream_sample = create_sample(bits, 0, SYS_FREQ, (int)SYS_FREQ / frame_rate);
+	int stream_sample = create_sample(bits, 0, SYS_FREQ, (int)SYS_FREQ / frame_rate, "STREAM");
 
 	if (channel[chanid].state == SOUND_PLAYING)
 	{
@@ -532,6 +532,7 @@ void stream_start(int chanid, int stream, int bits, int frame_rate)
 	channel[chanid].looping = 1;
 	channel[chanid].pos = 0;
 	channel[chanid].stream_type = SOUND_STREAM;
+	// Add to the list of playing streaming samples
 	audio_list.emplace_back(chanid);
 }
 
@@ -584,7 +585,7 @@ int create_sample(int bits, bool is_stereo, int freq, int len, const std::string
 	else { sample_name = name; }
 
 	mysample_temp->name = sample_name;
-	wrlog("Creating Stream Audio Sample with name %s and sound id %d", mysample_temp->name.c_str(), sound_id);
+	wrlog("Creating Audio Sample with name %s and sound id %d", mysample_temp->name.c_str(), sound_id);
 
 	// set rate and size in data structure
 	mysample_temp->fx.wFormatTag = WAVE_FORMAT_PCM;
@@ -601,7 +602,7 @@ int create_sample(int bits, bool is_stereo, int freq, int len, const std::string
 
 	//DEBUG: wrlog("Real buffer size %d", BUFFER_SIZE * 2);
 	//DEBUG: wrlog("Buffer size created here %d", (len * ((bits == 8) ? 1 : sizeof(short)) * ((is_stereo) ? 2 : 1)));
-
+	// Add to the list of samples
 	lsamples.push_back(mysample_temp);
 	return sound_id;
 }
@@ -664,4 +665,52 @@ int snumlookup(int snum)
 	}
 	wrlog("Attempted lookup of sample number, it was not found in loaded samples?");
 	return -1;
+}
+
+// Save a loaded sample, may be useful for saving modified or created samples. 
+// TODO: Add some error checking to this!!
+void save_sample(int samplenum)
+{
+	FILE* file;
+	errno_t err;
+
+	SAMPLE* p = lsamples[samplenum]; // Get a pointer to the required sample
+	// Verify we have something real
+	if (!p) { wrlog("Error writing sample #%d, could not get a pointer to that sample, does it exist?", samplenum); return; }
+	
+	string n_temp = p->name + ".wav";
+		
+	err = fopen_s(&file, n_temp.c_str(), "wb");
+	if (err != 0) {
+		wrlog("Error %d: Failed to open file: %s", stderr, n_temp.c_str());
+		return;
+	}
+		
+	// WAV file format sizes
+	DWORD subchunk1Size = 16; // PCM
+	DWORD subchunk2Size = (DWORD)p->dataSize;
+	DWORD chunkSize = 4 + (8 + subchunk1Size) + (8 + subchunk2Size);
+
+	// Write "RIFF" chunk descriptor
+	fwrite("RIFF", 1, 4, file);
+	fwrite(&chunkSize, 4, 1, file);
+	fwrite("WAVE", 1, 4, file);
+
+	// Write "fmt " subchunk
+	fwrite("fmt ", 1, 4, file);
+	fwrite(&subchunk1Size, 4, 1, file);
+	fwrite(&p->fx.wFormatTag, 2, 1, file);
+	fwrite(&p->fx.nChannels, 2, 1, file);
+	fwrite(&p->fx.nSamplesPerSec, 4, 1, file);
+	fwrite(&p->fx.nAvgBytesPerSec, 4, 1, file);
+	fwrite(&p->fx.nBlockAlign, 2, 1, file);
+	fwrite(&p->fx.wBitsPerSample, 2, 1, file);
+
+	// Write "data" subchunk
+	fwrite("data", 1, 4, file);
+	fwrite(&subchunk2Size, 4, 1, file);
+	fwrite((unsigned char*)p->data.buffer, 1, p->dataSize, file);
+
+	fclose(file);
+	wrlog("WAV file written to %s", n_temp.c_str());
 }
