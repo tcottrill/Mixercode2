@@ -88,7 +88,7 @@ void stream_update(int chanid, short *data);
 void stream_update(int chanid, unsigned char* data);
 void resample_wav_8(SAMPLE* sample, int new_freq);
 void resample_wav_16(SAMPLE* sample, int new_freq);
-int create_sample(int bits, bool is_stereo, int freq, int len);
+int create_sample(int bits, bool is_stereo, int freq, int len, const std::string& name = "STREAM");
 
 std::string numToName(int num);
 int nameToNum(std::string name);

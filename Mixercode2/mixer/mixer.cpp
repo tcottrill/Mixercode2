@@ -19,6 +19,7 @@
 #include "error_wav.h"
 #include <cstdint>
 #include <list>
+#include "log.h"
 //#include <thread>
 //#include <mutex>
 //#include <assert.h>
@@ -567,16 +568,23 @@ void sample_remove(int samplenum)
 }
 // create_sample:
 // *  Constructs a new sample structure of the specified type.
-int create_sample(int bits, bool is_stereo, int freq, int len)
+int create_sample(int bits, bool is_stereo, int freq, int len, const std::string& name)
 {
 	wrlog("Creating sample, Buffer size here is %d", len);
-
+	
+	std::string sample_name = "";
 	SAMPLE* mysample_temp = new SAMPLE();
 	sound_id++;
 	mysample_temp->num = sound_id;
 
-	//SOUND
-	wrlog("Creating Stream Audio Sample with sound id %d", sound_id);
+	if (name == "STREAM")	{
+		// Since it's const I have to work around here. 
+		 sample_name = name + std::to_string(sound_id);
+	}
+	else { sample_name = name; }
+
+	mysample_temp->name = sample_name;
+	wrlog("Creating Stream Audio Sample with name %s and sound id %d", mysample_temp->name.c_str(), sound_id);
 
 	// set rate and size in data structure
 	mysample_temp->fx.wFormatTag = WAVE_FORMAT_PCM;
@@ -586,15 +594,15 @@ int create_sample(int bits, bool is_stereo, int freq, int len)
 	mysample_temp->fx.wBitsPerSample = bits;
 	mysample_temp->fx.nAvgBytesPerSec = mysample_temp->fx.nSamplesPerSec * mysample_temp->fx.nBlockAlign;
 	mysample_temp->state = SOUND_LOADED;
-	mysample_temp->name = "STREAM";
 	mysample_temp->data.buffer = (unsigned char*)malloc(len * bits / 8);
+	mysample_temp->dataSize = len * bits / 8;
+	mysample_temp->sampleCount = len;
 	memset(mysample_temp->data.buffer, 0, len * bits / 8);
 
 	//DEBUG: wrlog("Real buffer size %d", BUFFER_SIZE * 2);
 	//DEBUG: wrlog("Buffer size created here %d", (len * ((bits == 8) ? 1 : sizeof(short)) * ((is_stereo) ? 2 : 1)));
 
 	lsamples.push_back(mysample_temp);
-
 	return sound_id;
 }
 
