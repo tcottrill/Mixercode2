@@ -6,7 +6,6 @@
 #include <string>
 #include <cstdint>
 #include <xaudio2redist.h>
-#include "sample_test.h"
 
 #define MAX_CHANNELS   16  //0-8 samples, 9-16 streaming
 #define MAX_SOUNDS     255 // max number of sounds loaded in system at once 128 + 2 overloaded for streams

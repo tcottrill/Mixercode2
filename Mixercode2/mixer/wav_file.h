@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include "mixer.h"
-#include "sample_test.h"
 
 int WavLoadFileInternal(unsigned char* buffer, int fileSize, SAMPLE *audioFile);
 
