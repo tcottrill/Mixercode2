@@ -316,9 +316,9 @@ void sample_stop(int chanid)
 {
 	if (channel[chanid].isPlaying)
 	{
-		channel[chanid].voice->SetVolume(0);
-		//channel[chanid].voice->Stop();
-		//channel[chanid].voice->FlushSourceBuffers();
+		//channel[chanid].voice->SetVolume(0);
+		channel[chanid].voice->Stop();
+		channel[chanid].voice->FlushSourceBuffers();
 		channel[chanid].isPlaying = false;
 
 		channel[chanid].state = SOUND_STOPPED;
@@ -355,7 +355,7 @@ void sample_start(int chanid, int samplenum, int loop)
 
 	if (channel[chanid].voice)
 	{
-		wrlog("Destroying Source Voice!, chan %d", chanid);
+		// DEBUG: wrlog("Destroying Source Voice!, chan %d", chanid);
 		channel[chanid].voice->Stop();
 		channel[chanid].voice->FlushSourceBuffers();
 		channel[chanid].voice->DestroyVoice();
@@ -398,7 +398,7 @@ void sample_start(int chanid, int samplenum, int loop)
 
 	channel[chanid].isPlaying = true;
 
-	wrlog("Playing Sample #%d :%s", samplenum, lsamples[samplenum]->name.c_str());
+	// DEBUG: wrlog("Playing Sample #%d :%s", samplenum, lsamples[samplenum]->name.c_str());
 }
 
 int sample_get_position(int chanid)
