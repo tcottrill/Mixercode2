@@ -220,7 +220,7 @@ void sample_stop(int chanid)
 {
 	auto& ch = channel[chanid];
 	if (ch.isPlaying && ch.voice) {
-		ch.voice->SetVolume(0.0f);
+		ch.voice->Stop();
 		ch.voice->FlushSourceBuffers();
 		ch.isPlaying = false;
 		ch.state = SoundState::Stopped;
