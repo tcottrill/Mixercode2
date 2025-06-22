@@ -21,7 +21,7 @@
   <ItemGroup>
     <ClInclude Include="core\fileio.h" />
     <ClInclude Include="core\glew.h" />
-    <ClInclude Include="core\ini.h" />
+    <ClInclude Include="core\iniFile.h" />
     <ClInclude Include="core\log.h" />
     <ClInclude Include="core\miniz.h" />
     <ClInclude Include="core\mmtimer.h" />
@@ -32,6 +32,7 @@
     <ClInclude Include="core\winfont.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="mixer\dbvolume.h" />
+    <ClInclude Include="mixer\emptywav.h" />
     <ClInclude Include="mixer\error_wav.h" />
     <ClInclude Include="mixer\helper_functions.h" />
     <ClInclude Include="mixer\minimp3.h" />
@@ -47,7 +48,7 @@
   <ItemGroup>
     <ClCompile Include="core\fileio.cpp" />
     <ClCompile Include="core\glew.c" />
-    <ClCompile Include="core\ini.cpp" />
+    <ClCompile Include="core\iniFile.cpp" />
     <ClCompile Include="core\log.cpp" />
     <ClCompile Include="core\miniz.c" />
     <ClCompile Include="core\mmtimer.cpp" />
@@ -171,6 +172,8 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;GLEW_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>./;./core;./mixer;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

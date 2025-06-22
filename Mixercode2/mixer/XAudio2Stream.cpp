@@ -5,11 +5,11 @@
 extern double dBToAmplitude(double db);
 
 // Error handling macro
-#define HR(hr) if (FAILED(hr)) { wrlog("Error at line %d: HRESULT = 0x%08X\n", __LINE__, hr); return hr; }
+#define HR(hr) if (FAILED(hr)) { LOG_INFO("Error at line %d: HRESULT = 0x%08X\n", __LINE__, hr); return hr; }
 
 #pragma comment(lib, "xaudio2.lib")
 
-// Local variables
+// Global variables
 const int NUM_BUFFERS = 5;
 IXAudio2* pXAudio2 = NULL;
 IXAudio2MasteringVoice* pMasterVoice = NULL;
@@ -52,7 +52,7 @@ float mixer_get_master_volume()
 
 BYTE* GetNextBuffer()
 {
-   // wrlog("Now using buffer %d", currentBufferIndex);
+   // LOG_INFO("Now using buffer %d", currentBufferIndex);
     return audioBuffers[currentBufferIndex];
 }
 
@@ -71,10 +71,9 @@ HRESULT xaudio2_init(int rate, int fps)
     HR(XAudio2Create(&pXAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR));
     
     // Create a mastering voice
-  //  HR(pXAudio2->CreateMasteringVoice(&pMasterVoice, XAUDIO2_DEFAULT_CHANNELS, XAUDIO2_DEFAULT_SAMPLERATE, 0, 0));
     HR(pXAudio2->CreateMasteringVoice(&pMasterVoice, XAUDIO2_DEFAULT_CHANNELS, SamplesPerSecond, 0, 0));
     
-    //pMasterVoice->SetVolume(.7f);
+    pMasterVoice->SetVolume(.9f);
    
     wfx.Format.wFormatTag = WAVE_FORMAT_PCM;
     wfx.Format.nSamplesPerSec = SamplesPerSecond;
@@ -91,11 +90,11 @@ HRESULT xaudio2_init(int rate, int fps)
     hr = pXAudio2->CreateSourceVoice(&pSourceVoice, &wfx.Format,  0, 1.0f,NULL,NULL,NULL);
     if (FAILED(hr))
     {
-        wrlog("Failed to create source voice: %#X\n", hr);
+        LOG_INFO("Failed to create source voice: %#X\n", hr);
         return hr;
     }
 
-    wrlog("Source Voice Creatred Successfully. SamplesPerBuffer here %d", SamplesPerBuffer);
+    LOG_INFO("Source Voice Creatred Successfully. SamplesPerBuffer here %d", SamplesPerBuffer);
     // Allocate the audio buffers
     bufferSize = SamplesPerBuffer * 2;
     for (int i = 0; i < NUM_BUFFERS; ++i)
@@ -117,7 +116,7 @@ HRESULT xaudio2_update(BYTE* buffera, DWORD bufferLength)
     HRESULT hr;
     //Debugging
     XAUDIO2_VOICE_STATE VoiceState;
-    //  wrlog("Bufferlength %d, Buffersize %d buffernum %d",bufferLength,bufferSize, currentBufferIndex);
+    //  LOG_INFO("Bufferlength %d, Buffersize %d buffernum %d",bufferLength,bufferSize, currentBufferIndex);
     // Submit the buffer to the source voice
     XAUDIO2_BUFFER buffer = { 0 };
     buffer.AudioBytes = bufferSize;
@@ -128,23 +127,24 @@ HRESULT xaudio2_update(BYTE* buffera, DWORD bufferLength)
     hr = pSourceVoice->SubmitSourceBuffer(&buffer);
     if (FAILED(hr))
     {
-        wrlog("Failed to submit source buffer: %#X\n", hr);
+        LOG_ERROR("Failed to submit source buffer: %#X\n", hr);
     }
 
     if (hr == XAUDIO2_E_DEVICE_INVALIDATED) {
         /* !!! FIXME: possibly disconnected or temporary lost. Recover? */
-        wrlog("Lost the XAudio2 source buffer: %#X\n", hr);
+        LOG_ERROR("Lost the XAudio2 source buffer: %#X\n", hr);
     }
 
     if (hr != S_OK) {  /* uhoh, panic! */
 
         pSourceVoice->FlushSourceBuffers();
-        wrlog("Panic, some odd error submitting the XAudio2 source buffer: %#X\n", hr);
+        LOG_ERROR("Panic, some odd error submitting the XAudio2 source buffer: %#X\n", hr);
+        exit(1);
               
     }
 
     pSourceVoice->GetState(&VoiceState);
-    //wrlog("Buffers in Queue: %d Samples Played: %d", VoiceState.BuffersQueued, VoiceState.SamplesPlayed);
+    //LOG_INFO("Buffers in Queue: %d Samples Played: %d", VoiceState.BuffersQueued, VoiceState.SamplesPlayed);
     // Move to the next buffer
     currentBufferIndex = (currentBufferIndex + 1) % NUM_BUFFERS;
    

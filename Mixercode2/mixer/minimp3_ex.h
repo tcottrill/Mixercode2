@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include "minimp3.h"
 
-#pragma warning (disable : 4244 )
+#pragma warning (disable : 4244 4267)
 
 /* flags for mp3dec_ex_open_* functions */
 #define MP3D_SEEK_TO_BYTE   0      /* mp3dec_ex_seek seeks to byte in stream */

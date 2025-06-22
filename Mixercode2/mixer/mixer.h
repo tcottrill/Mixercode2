@@ -5,61 +5,61 @@
 
 #include <string>
 #include <cstdint>
-#include <xaudio2redist.h>
+#include <xaudio2.h>
+#include <memory>
+#include <vector>
 
-#define MAX_CHANNELS   16  //0-8 samples, 9-16 streaming
-#define MAX_SOUNDS     255 // max number of sounds loaded in system at once 128 + 2 overloaded for streams
-
-#define SOUND_NULL     0
-#define SOUND_LOADED   1
-#define SOUND_PLAYING  2
-#define SOUND_STOPPED  3
-#define SOUND_PCM      4
-#define SOUND_STREAM   5
-
-
-typedef struct
-{
-	WAVEFORMATEX fx;
-
-	uint32_t sampleCount;
-	uint32_t dataSize;
-	int state;                  //Sound loaded or sound empty
-	int num;
-	std::string name;
-	union {
-		uint8_t* u8;      /* data for 8 bit samples */
-		int16_t* u16;    /* data for 16 bit samples */
-		void* buffer;           /* generic data pointer to the actual wave data*/
-	} data;
-
-}SAMPLE;
-
-
-struct CHANNEL
-{
-	IXAudio2SourceVoice* voice = nullptr;
-	XAUDIO2_BUFFER buffer = { 0 };
-	int state;                      // state of the sound ?? Playing/Stopped
-	unsigned int pos;
-	int loaded_sample_num;
-	int id;
-	int looping;
-	double vol;
-	int stream_type;
-	bool isAllocated;
-	bool isPlaying;
-	bool isReleased;
-	int frequency;
-	int volume;
-	int pan;
-
+// Strongly typed sound state
+enum class SoundState {
+    Null,
+    Loaded,
+    Playing,
+    Stopped,
+    PCM,
+    Stream
 };
 
+// Represents a playback channel
+struct CHANNEL {
+    IXAudio2SourceVoice* voice = nullptr;
+    XAUDIO2_BUFFER buffer = { 0 };
+    SoundState state = SoundState::Stopped;
+    unsigned int pos = 0;
+    int loaded_sample_num = -1;
+    int id = 0;
+    int looping = 0;
+    double vol = 1.0;
+    int stream_type = 0;
+    bool isAllocated = false;
+    bool isPlaying = false;
+    bool isReleased = false;
+    int frequency = 0;
+    int volume = 255;
+    int pan = 128;
+};
+
+// Represents a loaded audio sample
+struct SAMPLE {
+    WAVEFORMATEX fx = {};
+
+    uint32_t sampleCount = 0;
+    uint32_t dataSize = 0;
+    SoundState state = SoundState::Null;
+    int num = -1;
+    std::string name;
+
+    std::unique_ptr<uint8_t[]> data8;    // 8-bit PCM data
+    std::unique_ptr<int16_t[]> data16;   // 16-bit PCM data
+    void* buffer = nullptr;              // Pointer to active buffer (either data8 or data16)
+};
+
+// Mixer core functions
 void mixer_init(int rate, int fps);
 void mixer_update();
 void mixer_end();
-int load_sample(const char *archname, const char *filename, bool force_resample=true);
+
+// Sample loading and control
+int load_sample(const char* archname, const char* filename, bool force_resample = true);
 void sample_stop(int chanid);
 void sample_start(int chanid, int samplenum, int loop);
 void sample_set_position(int chanid, int pos);
@@ -68,36 +68,41 @@ void sample_set_freq(int chanid, int freq);
 int sample_playing(int chanid);
 void sample_end(int chanid);
 void sample_remove(int samplenum);
-//
+void save_sample(int samplenum);
+
+// Mixer-based sample control
 void sample_start_mixer(int chanid, int samplenum, int loop);
 void sample_end_mixer(int chanid);
 void sample_stop_mixer(int chanid);
 void sample_set_volume_mixer(int chanid, int volume);
 int sample_get_volume_mixer(int chanid);
 int sample_playing_mixer(int chanid);
+
+// Utility
 short Make16bit(uint8_t sample);
 
+// Global audio control
 void mute_audio();
 void restore_audio();
 void pause_audio();
 void resume_audio();
-//Streaming audio functions added on.
+
+// Streaming functions
 void stream_start(int chanid, int stream, int bits, int frame_rate);
 void stream_stop(int chanid, int stream);
-void stream_update(int chanid, short *data);
+void stream_update(int chanid, short* data);
 void stream_update(int chanid, unsigned char* data);
+
+// Resampling
 void resample_wav_8(SAMPLE* sample, int new_freq);
 void resample_wav_16(SAMPLE* sample, int new_freq);
-int create_sample(int bits, bool is_stereo, int freq, int len, const std::string& name);
-void save_sample(int samplenum);
 
+// Sample creation
+int create_sample(int bits, bool is_stereo, int freq, int len, const std::string& name);
+
+// Sample lookup
 std::string numToName(int num);
-int nameToNum(std::string name);
+int nameToNum(const std::string& name);
 int snumlookup(int snum);
 
-#endif
-
-
-
-
-
+#endif // MIXER_H

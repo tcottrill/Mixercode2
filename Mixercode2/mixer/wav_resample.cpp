@@ -72,10 +72,6 @@ void linear_interpolation_8(uint8_t* input, uint8_t* output, int input_size, int
 	}
 }
 
-//#include <iostream>
-//#include <cmath>
-//#include <cstdint>
-
 // Function to scale pitch without changing data size
 void changePitch(const uint8_t* input, uint8_t* output, size_t size, float ratio) {
 	for (size_t i = 0; i < size; ++i) {
@@ -95,44 +91,3 @@ void changePitch(const uint8_t* input, uint8_t* output, size_t size, float ratio
 		}
 	}
 }
-/*
-#include <iostream>
-#include <cmath>
-#include <cstdint>
-
-// Function to scale pitch without changing data size
-void changePitch(const uint8_t* input, uint8_t* output, size_t size, float ratio) {
-	for (size_t i = 0; i < size; ++i) {
-		float index = i / ratio;
-		size_t floorIndex = static_cast<size_t>(index);
-
-		if (floorIndex + 1 < size) {
-			// Linear interpolation
-			float frac = index - floorIndex;
-			output[i] = static_cast<uint8_t>(
-				input[floorIndex] * (1 - frac) + input[floorIndex + 1] * frac
-				);
-		}
-		else {
-			// Edge case: use the last sample for boundary conditions
-			output[i] = input[size - 1];
-		}
-	}
-}
-
-int main() {
-	const size_t dataSize = 1024;  // Example size of the audio sample
-	uint8_t audioSample[dataSize] = { // Insert your audio sample data here  };
-	uint8_t modifiedSample[dataSize]; // Output buffer for the processed data
-
-	float originalFrequency = 440.0f; // Example: 440 Hz
-	float targetFrequency = 880.0f;   // Example: 880 Hz (double the pitch)
-
-	float ratio = targetFrequency / originalFrequency;
-
-	changePitch(audioSample, modifiedSample, dataSize, ratio);
-
-	std::cout << "Pitch adjustment complete. Data size remains unchanged: " << dataSize << "\n";
-	return 0;
-}
-*/

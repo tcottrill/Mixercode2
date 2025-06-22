@@ -1,130 +1,112 @@
 #include "winfont.h"
+#include <array>
+#include <cstdarg>
+#include <cstdio>
 
-GLuint textBase = 0;
-GLuint startTextModeList = 0;
+namespace {
+    constexpr int kDisplayListCount = 96;
+    constexpr int kFirstChar = 32;
+    constexpr int kMaxPrintBuffer = 256;
 
-#pragma warning ( disable:4996 )
+    GLuint textBase = 0;
+    GLuint startTextModeList = 0;
+}
 
 int GetCharFontWidth(const char cCharacter)
 {
-	HWND hWnd = win_get_window();
-	HDC hDC = GetDC(hWnd);
-	SIZE kSize;
-	GetTextExtentPoint32A(hDC, &cCharacter, 1, &kSize);
-	ReleaseDC(hWnd, hDC);
-	return (int)kSize.cx;
+    HWND hWnd = win_get_window();
+    HDC hDC = GetDC(hWnd);
+    SIZE kSize{};
+    GetTextExtentPoint32A(hDC, &cCharacter, 1, &kSize);
+    ReleaseDC(hWnd, hDC);
+    return static_cast<int>(kSize.cx);
 }
 
 int Font_Init(int sizept)
 {
-	TEXTMETRIC kMetric;
-	HWND hwnd;
-	HFONT font;
-	HFONT oldfont;
-	HDC    hdc;
-	long lfHeight;
-	hwnd = win_get_window();
-	hdc = GetDC(hwnd);
+    HWND hwnd = win_get_window();
+    HDC hdc = GetDC(hwnd);
+    if (!hdc) return 0;
 
-	//Create 96 display lists
-	textBase = glGenLists(96);
-	if (textBase == 0)
-	{
-		wrlog("Unable to create 96 display lists for font");
-		return 0;
-	}
+    textBase = glGenLists(kDisplayListCount);
+    if (textBase == 0)
+    {
+        LOG_INFO("Unable to create display lists for font");
+        ReleaseDC(hwnd, hdc);
+        return 0;
+    }
 
-	lfHeight = -MulDiv(sizept, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+    const long lfHeight = -MulDiv(sizept, GetDeviceCaps(hdc, LOGPIXELSY), 72);
 
-	//Create font
-	font = CreateFont(lfHeight,			//height -18
-		0,				//default width,
-		0, 0,			//angles
-		FW_BOLD,		//bold
-		0,			//italic
-		0,			//underline
-		0,			//strikeout
-		ANSI_CHARSET,	//character set
-		OUT_TT_PRECIS,	//precision
-		CLIP_DEFAULT_PRECIS,
-		ANTIALIASED_QUALITY,	//quality
-		FF_DONTCARE | DEFAULT_PITCH,
-		L"Arial");
+    HFONT font = CreateFontW(
+        lfHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        ANSI_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        ANTIALIASED_QUALITY, FF_DONTCARE | DEFAULT_PITCH,
+        L"Arial");
 
-	//Select font
-	oldfont = (HFONT)SelectObject(hdc, font);
+    if (!font) {
+        ReleaseDC(hwnd, hdc);
+        return 0;
+    }
 
-	//Fill in the 96 display lists, starting with character 32
-	wglUseFontBitmaps(hdc, 32, 96, textBase);
-	GetTextMetrics(hdc, &kMetric);
+    HGDIOBJ oldfont = SelectObject(hdc, font);
+    wglUseFontBitmapsA(hdc, kFirstChar, kDisplayListCount, textBase);
+    SelectObject(hdc, oldfont);
+    DeleteObject(font);
+    ReleaseDC(hwnd, hdc);
 
-	SelectObject(hdc, oldfont);				// Selects The Previous Font
-	DeleteObject(font);                     //Cleanup
-	wrlog("Font created successfully");
-
-	return 1;
+    LOG_INFO("Font created successfully");
+    return 1;
 }
 
-//Start text mode
-void StartTextMode(void)
+void StartTextMode()
 {
-	//Create a display list if not already done
-	if (!startTextModeList)
-	{
-		startTextModeList = glGenLists(1);
-		glNewList(startTextModeList, GL_COMPILE);
-		{
-			glListBase(textBase - 32);
+    if (startTextModeList == 0)
+    {
+        startTextModeList = glGenLists(1);
+        glNewList(startTextModeList, GL_COMPILE);
+        glListBase(textBase - kFirstChar);
+        ViewOrtho(SCREEN_W, SCREEN_H);
+        glDisable(GL_DEPTH_TEST);
+        glEndList();
+    }
 
-			ViewOrtho(SCREEN_W, SCREEN_H);
-
-			//Set states
-			glDisable(GL_DEPTH_TEST);
-		}
-		glEndList();
-	}
-
-	//Call the list
-	//	glPushAttrib(GL_LIST_BIT);				// Pushes The Display List Bits
-	glCallList(startTextModeList);
-	//	glPopAttrib();
+    glCallList(startTextModeList);
 }
 
-//Print some text
 void Font_Print(int x, int y, const char* string, ...)
 {
-	//Convert to text
-	static char text[256];
+    if (!string) return;
 
-	va_list va;
+    std::array<char, kMaxPrintBuffer> buffer;
 
-	if (string == NULL)
-		return;
+    va_list args;
+    va_start(args, string);
+    vsnprintf(buffer.data(), buffer.size(), string, args);
+    va_end(args);
 
-	va_start(va, string);
-	vsprintf(text, string, va);
-	va_end(va);
-
-	//Print the text
-	glRasterPos2i(x, y);
-	glCallLists(strlen(text), GL_UNSIGNED_BYTE, text);
+    glRasterPos2i(x, y);
+    glCallLists(static_cast<GLsizei>(strlen(buffer.data())), GL_UNSIGNED_BYTE, buffer.data());
 }
 
-//End text mode
-void EndTextMode(void)
+void EndTextMode()
 {
-	//restore matrices
-	glMatrixMode(GL_PROJECTION);
-	glPopMatrix();
-	glMatrixMode(GL_MODELVIEW);
-	glPopMatrix();
-
-	//reset other states
-	glListBase(0);
-	//glEnable(GL_DEPTH_TEST);
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glListBase(0);
 }
 
-void KillFont()						// Delete The Font List
+void KillFont()
 {
-	glDeleteLists(textBase, 96);				// Delete All 96 Characters ( NEW )
+    if (textBase) {
+        glDeleteLists(textBase, kDisplayListCount);
+        textBase = 0;
+    }
+
+    if (startTextModeList) {
+        glDeleteLists(startTextModeList, 1);
+        startTextModeList = 0;
+    }
 }

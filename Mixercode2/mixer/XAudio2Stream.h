@@ -1,9 +1,7 @@
-#pragma once
-
 #ifndef XAUDIO2STREAM_H
 #define XAUDIO2STREAM_H
 
-#include <xaudio2redist.h>
+#include <xaudio2.h>
 #include <vector>
 #include <thread>
 #include <mutex>

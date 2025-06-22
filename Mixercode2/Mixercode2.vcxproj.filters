@@ -66,9 +66,6 @@
     <ClInclude Include="core\glew.h">
       <Filter>Source Files\core</Filter>
     </ClInclude>
-    <ClInclude Include="core\ini.h">
-      <Filter>Source Files\core</Filter>
-    </ClInclude>
     <ClInclude Include="core\log.h">
       <Filter>Source Files\core</Filter>
     </ClInclude>
@@ -95,6 +92,12 @@
     </ClInclude>
     <ClInclude Include="mixer\helper_functions.h">
       <Filter>Source Files\mixer</Filter>
+    </ClInclude>
+    <ClInclude Include="mixer\emptywav.h">
+      <Filter>Source Files\mixer</Filter>
+    </ClInclude>
+    <ClInclude Include="core\iniFile.h">
+      <Filter>Source Files\core</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -125,9 +128,6 @@
     <ClCompile Include="core\glew.c">
       <Filter>Source Files\core</Filter>
     </ClCompile>
-    <ClCompile Include="core\ini.cpp">
-      <Filter>Source Files\core</Filter>
-    </ClCompile>
     <ClCompile Include="core\log.cpp">
       <Filter>Source Files\core</Filter>
     </ClCompile>
@@ -148,6 +148,9 @@
     </ClCompile>
     <ClCompile Include="mixer\helper_functions.cpp">
       <Filter>Source Files\mixer</Filter>
+    </ClCompile>
+    <ClCompile Include="core\iniFile.cpp">
+      <Filter>Source Files\core</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

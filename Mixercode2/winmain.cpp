@@ -8,11 +8,12 @@
 #include "winfont.h"
 #include "rawinput.h"
 #include "fileio.h"
-#include "ini.h"
+#include "iniFile.h"
 #include <vector>
 #include "mmtimer.h"
 #include "mixer.h"
 #include "path_helper.h"
+#include <iostream>
 
 double millsec = (double)1000 / (double)60;
 double gametime = 0;// = TimerGetTimeMS();
@@ -126,18 +127,23 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	// This solves any issues with running from a front end in a different folder. 
 	temppath = getpathU(0, 0);
 
-	if (!SetCurrentDirectory(temppath.c_str()))
+	if (!SetCurrentDirectoryW(temppath.c_str()))
 	{
-		wrlog("SetCurrentDirectory failed (%d)\n", GetLastError());
+		std::wcerr << L"SetCurrentDirectory failed (" << GetLastError() << L")\n";
 	}
 	else
 	{
-		wrlog("SetCurrentDirectory completed: %s",temppath.c_str());
+		std::wcerr << L"SetCurrentDirectory completed: " << temppath << L"\n";
 	}
 
 	///////////////// Initialize everything here //////////////////////////////
-	LogOpen("testlog.txt");
-	wrlog("Opening Log");
+	if (!Log::open("testlog.txt")) {
+		std::cerr << "Failed to open log file!\n";
+		return 1;
+	}
+	
+	
+	LOG_INFO("Opening Log");
 
 	// enable OpenGL for the window
 	EnableOpenGL(hWnd, &hDC, &hRC);
@@ -146,10 +152,10 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	if (GLEW_OK != err)
 	{
 		/* Problem: glewInit failed, something is seriously wrong. */
-		wrlog("Error: %s\n", glewGetErrorString(err));
+		LOG_INFO("Error: %s\n", glewGetErrorString(err));
 
 	}
-	wrlog("Status: Using GLEW %s\n", glewGetString(GLEW_VERSION));
+	LOG_INFO("Status: Using GLEW %s\n", glewGetString(GLEW_VERSION));
 
 	wglSwapIntervalEXT(1);
 	TimerInit();
@@ -172,6 +178,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 
 	int channel_status[8] = { 0 };
 
+
+	save_sample(6);
 	/////////////////// END INITIALIZATION ////////////////////////////////////
 	
 	static int b = 100;
@@ -259,7 +267,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	KillFont();
 	//stream_stop(11,0);
 	mixer_end();
-	wrlog("Closing Log");
+	LOG_INFO("Closing Log");
 	LogClose();
 	// destroy the window explicitly
 	DestroyWindow(hWnd);
