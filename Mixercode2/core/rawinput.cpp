@@ -1,20 +1,83 @@
-//Some code for this taken from
-//https://blog.molecular-matters.com/2011/09/05/properly-handling-keyboard-input/
+// -----------------------------------------------------------------------------
+// File: rawinput.cpp
 //
+// Description:
+//   Raw Input handler for Windows providing low-level access to keyboard and
+//   mouse input. Implements modern C++ wrappers and callback systems inspired
+//   by GLFW, with compatibility for Allegro-style key/mouse state tracking.
+//
+// Features:
+//   - GLFW-style key and mouse button callbacks
+//   - Cursor position tracking with adjustable scaling
+//   - Allegro-compatible input state arrays for legacy support
+//
+// Requirements:
+//   - Windows XP or later
+//   - Single keyboard and mouse device (multi-device not supported)
+//
+// Authors:
+//   - Jay Tennant (original implementation)
+//   - TC (Allegro Compatibility, Full Keyboard Key Support, Modernization and GLFW style callback system)
+// -----------------------------------------------------------------------------
+
+//Note: Updated bad mouse handling code. 8/5/25
 
 #include "rawinput.h"
-#include "log.h"
+#include "sys_log.h"
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 /* Forces RAWINPUTDEVICE and related Win32 APIs to be visible.
  * Only compatible with WIndows XP and above. */
 #undef _WIN32_WINNT
 #define _WIN32_WINNT 0x0501
 
+ // GLFW-style modifier flags (non-conflicting)
+enum MouseModifiers {
+	MMOD_NONE = 0,
+	MMOD_SHIFT = 0x01,
+	MMOD_CONTROL = 0x02,
+	MMOD_ALT = 0x04,
+	MMOD_SUPER = 0x08
+};
+
 char buf[256];
 HWND windowHandle;
 unsigned char key[256];
 unsigned int lastkey[256];
 int mouse_b;
+
+// This defaults to 1x for AAE - To be removed..
+static float g_mouseScale = 1.0f;
+
+// --------------------
+// Thread management
+// --------------------
+static std::thread inputThread;
+static std::mutex inputQueueMutex;
+static std::condition_variable inputCV;
+static std::atomic<bool> inputThreadExit{ false };
+static std::atomic<bool> inputThreadRun{ false };
+static std::queue<RAWINPUT> inputQueue;
+
+// --------------------
+// Forward declarations
+// --------------------
+static void RawInput_ProcessInternal(const RAWINPUT& input);
+static void input_thread_func();
+
+
+// -----------------------------------------------------------------------------
+// set_mouse_mickey_scale
+// Description:
+//   Sets the scaling multiplier applied to relative mouse motion (mickeys).
+// -----------------------------------------------------------------------------
+void set_mouse_mickey_scale(float scale) {
+	g_mouseScale = scale;
+}
 
 struct DXTI_MOUSE_STATE
 {
@@ -30,23 +93,60 @@ enum DXTI_MOUSE_BUTTON_STATE //named state of mouse buttons
 };
 struct DXTI_MOUSE_STATE m_mouseStateRaw;
 
+// GLFW style callbacks
+static MouseButtonCallback g_mouseButtonCallback = nullptr;
+static CursorPositionCallback g_cursorPositionCallback = nullptr;
+static KeyCallback g_keyCallback = nullptr;
+
+// -----------------------------------------------------------------------------
+// GetModifierFlags
+// Description:
+//   TODO: Describe this function.
+// -----------------------------------------------------------------------------
+static int GetModifierFlags()
+{
+	int mods = 0;
+	if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
+		mods |= MMOD_SHIFT;
+	if (GetAsyncKeyState(VK_CONTROL) & 0x8000)
+		mods |= MMOD_CONTROL;
+	if (GetAsyncKeyState(VK_MENU) & 0x8000)
+		mods |= MMOD_ALT;
+	if ((GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))
+		mods |= MMOD_SUPER;
+	return mods;
+}
+
+// -----------------------------------------------------------------------------
+// SetKeyCallback
+// Description:
+//   Registers a callback function for keyboard key events.
+// -----------------------------------------------------------------------------
+void SetKeyCallback(KeyCallback callback) {
+	g_keyCallback = callback;
+}
+
+// -----------------------------------------------------------------------------
+// RawInput_Initialize
+// Description:
+//   Initializes raw input devices (keyboard and mouse) for the given window.
+// -----------------------------------------------------------------------------
 HRESULT RawInput_Initialize(HWND hWnd)
 {
-	RAWINPUTDEVICE Rid[2];
+	RAWINPUTDEVICE Rid[2]{};
 
 	Rid[0].usUsagePage = 0x01;
 	Rid[0].usUsage = 0x02;
-	Rid[0].dwFlags = 0;			//RIDEV_NOLEGACY | RIDEV_CAPTUREMOUSE | RIDEV_INPUTSINK;
+	Rid[0].dwFlags = RIDEV_INPUTSINK;			//RIDEV_NOLEGACY | RIDEV_CAPTUREMOUSE | RIDEV_INPUTSINK;
 	Rid[0].hwndTarget = hWnd;
 
 	Rid[1].usUsagePage = 0x01;
 	Rid[1].usUsage = 0x06;
-	Rid[1].dwFlags = 0;
+	Rid[1].dwFlags = RIDEV_INPUTSINK;
 	Rid[1].hwndTarget = hWnd;
 
 	ZeroMemory(key, sizeof(key));
 	ZeroMemory(lastkey, sizeof(lastkey));
-	// ZeroMemory(&m_mouseState, sizeof(m_mouseState));
 	ZeroMemory(&m_mouseStateRaw, sizeof(m_mouseStateRaw));
 
 	ShowCursor(TRUE);
@@ -54,23 +154,84 @@ HRESULT RawInput_Initialize(HWND hWnd)
 	if (FALSE == RegisterRawInputDevices(Rid, 2, sizeof(Rid[0]))) //registers both mouse and keyboard
 		return E_FAIL;
 
+	inputThreadExit = false;
+	inputThreadRun = false;
+	inputThread = std::thread(input_thread_func);
+	LOG_INFO("RawInput thread: started");
 	return S_OK;
 }
 
-LRESULT RawInput_ProcessInput(HWND hWnd, WPARAM wParam, LPARAM lParam)
-{
+// -----------------------------------------------------------------------------
+// RawInput_ProcessInput - now only enqueues input and signals worker
+// -----------------------------------------------------------------------------
+LRESULT RawInput_ProcessInput(HWND hWnd, WPARAM wParam, LPARAM lParam) {
 	RAWINPUT input;
 	UINT size = sizeof(input);
+	GetRawInputData((HRAWINPUT)lParam, RID_INPUT, &input, &size, sizeof(RAWINPUTHEADER));
 
-	GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, &input, &size, sizeof(RAWINPUTHEADER));
+	{
+		std::lock_guard<std::mutex> lock(inputQueueMutex);
+		inputQueue.push(input);
+		inputThreadRun = true;
+	}
+	inputCV.notify_one();
 
-	if (input.header.dwType == RIM_TYPEKEYBOARD) {
-		auto& kbd = input.data.keyboard;
+	return DefWindowProc(hWnd, WM_INPUT, wParam, lParam);
+}
+
+// -----------------------------------------------------------------------------
+// Input Thread Function - processes queued events in batches
+// -----------------------------------------------------------------------------
+static void input_thread_func() {
+	std::unique_lock<std::mutex> lock(inputQueueMutex);
+	while (!inputThreadExit) {
+		inputCV.wait(lock, [] { return inputThreadExit || inputThreadRun.load(); });
+		if (inputThreadExit) break;
+
+		// Swap queue to local for batch processing
+		std::queue<RAWINPUT> localQueue;
+		std::swap(localQueue, inputQueue);
+		inputThreadRun = false;
+		lock.unlock();
+
+		while (!localQueue.empty()) {
+			RawInput_ProcessInternal(localQueue.front());
+			localQueue.pop();
+		}
+
+		lock.lock();
+	}
+	LOG_INFO("RawInput thread: exiting");
+}
+
+// -----------------------------------------------------------------------------
+// Shutdown helper
+// -----------------------------------------------------------------------------
+void RawInput_Shutdown() {
+	{
+		std::lock_guard<std::mutex> lock(inputQueueMutex);
+		inputThreadExit = true;
+	}
+	inputCV.notify_one();
+	if (inputThread.joinable()) inputThread.join();
+}
+
+
+// -----------------------------------------------------------------------------
+// RawInput_ProcessInput
+// Description:
+//   Processes WM_INPUT messages and updates internal key and mouse state.
+// -----------------------------------------------------------------------------
+//LRESULT RawInput_ProcessInput(HWND hWnd, WPARAM wParam, LPARAM lParam)
+static void RawInput_ProcessInternal(const RAWINPUT& input) 
+{
+		if (input.header.dwType == RIM_TYPEKEYBOARD) {
+		const auto& kbd = input.data.keyboard;
 		UINT virtualKey = kbd.VKey;
 		UINT scanCode = kbd.MakeCode;
 		UINT flags = kbd.Flags;
 
-		if (virtualKey == 255) return 0;
+		if (virtualKey == 255) return;
 
 		if (virtualKey == VK_SHIFT)
 			virtualKey = MapVirtualKey(scanCode, MAPVK_VSC_TO_VK_EX);
@@ -113,35 +274,58 @@ LRESULT RawInput_ProcessInput(HWND hWnd, WPARAM wParam, LPARAM lParam)
 			lastkey[virtualKey] = (lastkey[virtualKey] + 1) % 0xFFFFFFFF;
 			if (lastkey[virtualKey] == 0) lastkey[virtualKey] = 1;
 		}
+
+		if (g_keyCallback) {
+			int mods = GetModifierFlags();
+			int action = (kbd.Flags & RI_KEY_BREAK) ? 0 : 1;
+			g_keyCallback((int)virtualKey, (int)scanCode, action, mods);
+		}
+
 	}
 	else if (input.header.dwType == RIM_TYPEMOUSE)
 	{
-		m_mouseStateRaw.dx = input.data.mouse.lLastX;
-		m_mouseStateRaw.dy = input.data.mouse.lLastY;
+		int mods = GetModifierFlags();
+
+		// 
+		// Explicitly accumulate all WM_INPUT deltas per frame.
+		m_mouseStateRaw.dx += input.data.mouse.lLastX;
+		m_mouseStateRaw.dy += input.data.mouse.lLastY;
 
 		m_mouseStateRaw.x += m_mouseStateRaw.dx;
 		m_mouseStateRaw.y += m_mouseStateRaw.dy;
+
+		if (g_cursorPositionCallback)
+			g_cursorPositionCallback((double)m_mouseStateRaw.x, (double)m_mouseStateRaw.y);
 
 		switch (input.data.mouse.usButtonFlags)
 		{
 		case RI_MOUSE_LEFT_BUTTON_DOWN:
 			m_mouseStateRaw.left = DOWN;
+			if (g_mouseButtonCallback) g_mouseButtonCallback(0, 1, mods);  // Left button pressed
 			break;
 		case RI_MOUSE_LEFT_BUTTON_UP:
 			m_mouseStateRaw.left = UP;
+			if (g_mouseButtonCallback) g_mouseButtonCallback(0, 0, mods);  // Left button released
 			break;
+
 		case RI_MOUSE_RIGHT_BUTTON_DOWN:
 			m_mouseStateRaw.right = DOWN;
+			if (g_mouseButtonCallback) g_mouseButtonCallback(1, 1, mods);  // Right button pressed
 			break;
 		case RI_MOUSE_RIGHT_BUTTON_UP:
 			m_mouseStateRaw.right = UP;
+			if (g_mouseButtonCallback) g_mouseButtonCallback(1, 0, mods);  // Right button released
 			break;
+
 		case RI_MOUSE_MIDDLE_BUTTON_DOWN:
 			m_mouseStateRaw.middle = DOWN;
+			if (g_mouseButtonCallback) g_mouseButtonCallback(2, 1, mods);  // Middle button pressed
 			break;
 		case RI_MOUSE_MIDDLE_BUTTON_UP:
 			m_mouseStateRaw.middle = UP;
+			if (g_mouseButtonCallback) g_mouseButtonCallback(2, 0, mods);  // Middle button released
 			break;
+
 		case RI_MOUSE_WHEEL:
 			m_mouseStateRaw.dwheel += input.data.mouse.usButtonData;
 			break;
@@ -153,19 +337,44 @@ LRESULT RawInput_ProcessInput(HWND hWnd, WPARAM wParam, LPARAM lParam)
 		if (m_mouseStateRaw.middle) bset(mouse_b, 0x04); else  bclr(mouse_b, 0x04);
 	}
 
-	return 0;
-	//DefWindowProc(hWnd, WM_INPUT, wParam, lParam);
 }
 
+// -----------------------------------------------------------------------------
+// SetMouseButtonCallback
+// Description:
+//   Registers a callback function for mouse button events.
+// -----------------------------------------------------------------------------
+void SetMouseButtonCallback(MouseButtonCallback callback) {
+	g_mouseButtonCallback = callback;
+}
+
+// -----------------------------------------------------------------------------
+// SetCursorPositionCallback
+// Description:
+//   Registers a callback function for mouse cursor position changes.
+// -----------------------------------------------------------------------------
+void SetCursorPositionCallback(CursorPositionCallback callback) {
+	g_cursorPositionCallback = callback;
+}
+
+// -----------------------------------------------------------------------------
+// test_clr
+// Description:
+//   Clears internal input state buffers.
+// -----------------------------------------------------------------------------
 void test_clr()
 {
 	char buf[256];
 	SecureZeroMemory(buf, 256);
 	SecureZeroMemory(key, 256);
-	//SecureZeroMemory(lastkey, 256);
 }
 
 // Function to get the window size
+// -----------------------------------------------------------------------------
+// getWindowSize
+// Description:
+//   Retrieves the current size of the client area of the window.
+// -----------------------------------------------------------------------------
 void getWindowSize(int* width, int* height) {
 	RECT rect;
 	GetClientRect(windowHandle, &rect);
@@ -173,6 +382,11 @@ void getWindowSize(int* width, int* height) {
 	*height = rect.bottom - rect.top;
 }
 
+// -----------------------------------------------------------------------------
+// get_mouse_win
+// Description:
+//   Retrieves the current mouse position in window (client) coordinates.
+// -----------------------------------------------------------------------------
 void get_mouse_win(int* mickeyx, int* mickeyy)
 {
 	POINT cursor_pos;
@@ -182,34 +396,39 @@ void get_mouse_win(int* mickeyx, int* mickeyy)
 	*mickeyy = cursor_pos.y;
 }
 
+// Your updated function
+// -----------------------------------------------------------------------------
+// get_mouse_mickeys
+// Description:
+//   Retrieves and resets relative mouse movement, scaled by the mouse mickey scale.
+// -----------------------------------------------------------------------------
 void get_mouse_mickeys(int* mickeyx, int* mickeyy)
 {
-	static RECT windowRect;
-
 	int temp_x = m_mouseStateRaw.dx;
 	int temp_y = m_mouseStateRaw.dy;
-
-	/*
-	// Get current window dimensions
-	GetClientRect(ihwnd, &windowRect);
-	int width = windowRect.right - windowRect.left;
-	int height = windowRect.bottom - windowRect.top;
-
-	// Scale the raw input to the window size
-	int scaledX = (temp_x * 4096) / width;  //4096
-	int scaledY = temp_y * 4096 / height;   // 4096
-	*/
-
-	m_mouseStateRaw.dx -= temp_x;
-	m_mouseStateRaw.dy -= temp_y;
-
-	*mickeyx = temp_x * 2;
-	*mickeyy = temp_y * 2;
+	m_mouseStateRaw.dx = 0;
+	m_mouseStateRaw.dy = 0;
+	*mickeyx = static_cast<int>(temp_x * g_mouseScale);
+	*mickeyy = static_cast<int>(temp_y * g_mouseScale);
 }
-
 //keyboard state checks
+// -----------------------------------------------------------------------------
+// isKeyHeld
+// Description:
+//   Returns non-zero if the given key has been pressed (held count).
+// -----------------------------------------------------------------------------
 int isKeyHeld(INT vkCode) { return lastkey[vkCode]; }
+// -----------------------------------------------------------------------------
+// IsKeyDown
+// Description:
+//   Returns true if the specified key is currently pressed.
+// -----------------------------------------------------------------------------
 bool IsKeyDown(INT vkCode) { return key[vkCode & 0xff] & 0x80 ? TRUE : FALSE; }
+// -----------------------------------------------------------------------------
+// IsKeyUp
+// Description:
+//   Returns true if the specified key is currently released.
+// -----------------------------------------------------------------------------
 bool IsKeyUp(INT vkCode) { return  key[vkCode & 0xff] & 0x80 ? FALSE : TRUE; }
 
 //summed mouse state checks/sets;
@@ -217,22 +436,97 @@ bool IsKeyUp(INT vkCode) { return  key[vkCode & 0xff] & 0x80 ? FALSE : TRUE; }
 //naming is left to C style for compatibility
 
 void get_mouse_mickeys(int* mickeyx, int* mickeyy);
+// -----------------------------------------------------------------------------
+// GetMouseX
+// Description:
+//   Returns the absolute X position of the mouse.
+// -----------------------------------------------------------------------------
 LONG GetMouseX() { return m_mouseStateRaw.x; }
+// -----------------------------------------------------------------------------
+// GetMouseY
+// Description:
+//   Returns the absolute Y position of the mouse.
+// -----------------------------------------------------------------------------
 LONG GetMouseY() { return m_mouseStateRaw.y; }
+// -----------------------------------------------------------------------------
+// GetMouseWheel
+// Description:
+//   Returns the absolute scroll wheel value.
+// -----------------------------------------------------------------------------
 LONG GetMouseWheel() { return m_mouseStateRaw.wheel; }
+// -----------------------------------------------------------------------------
+// SetMouseX
+// Description:
+//   Sets the internal X position of the mouse.
+// -----------------------------------------------------------------------------
 void SetMouseX(LONG x) { m_mouseStateRaw.x = x; }
+// -----------------------------------------------------------------------------
+// SetMouseY
+// Description:
+//   Sets the internal Y position of the mouse.
+// -----------------------------------------------------------------------------
 void SetMouseY(LONG y) { m_mouseStateRaw.y = y; }
+// -----------------------------------------------------------------------------
+// SetMouseWheel
+// Description:
+//   Sets the internal scroll wheel value.
+// -----------------------------------------------------------------------------
 void SetMouseWheel(LONG wheel) { m_mouseStateRaw.wheel = wheel; }
 
 //relative mouse state changes
+// -----------------------------------------------------------------------------
+// GetMouseXChange
+// Description:
+//   Returns the change in mouse X position since last reset.
+// -----------------------------------------------------------------------------
 LONG GetMouseXChange() { return m_mouseStateRaw.dx; }
+// -----------------------------------------------------------------------------
+// GetMouseYChange
+// Description:
+//   Returns the change in mouse Y position since last reset.
+// -----------------------------------------------------------------------------
 LONG GetMouseYChange() { return m_mouseStateRaw.dy; }
+// -----------------------------------------------------------------------------
+// GetMouseWheelChange
+// Description:
+//   Returns the change in scroll wheel value since last reset.
+// -----------------------------------------------------------------------------
 LONG GetMouseWheelChange() { return m_mouseStateRaw.dwheel; }
 
 //mouse button state checks
+// -----------------------------------------------------------------------------
+// IsMouseLButtonDown
+// Description:
+//   Returns true if the left mouse button is currently down.
+// -----------------------------------------------------------------------------
 bool IsMouseLButtonDown() { return (m_mouseStateRaw.left == DOWN) ? TRUE : FALSE; }
+// -----------------------------------------------------------------------------
+// IsMouseLButtonUp
+// Description:
+//   Returns true if the left mouse button is currently up.
+// -----------------------------------------------------------------------------
 bool IsMouseLButtonUp() { return (m_mouseStateRaw.left == UP) ? TRUE : FALSE; }
+// -----------------------------------------------------------------------------
+// IsMouseRButtonDown
+// Description:
+//   Returns true if the right mouse button is currently down.
+// -----------------------------------------------------------------------------
 bool IsMouseRButtonDown() { return (m_mouseStateRaw.right == DOWN) ? TRUE : FALSE; }
+// -----------------------------------------------------------------------------
+// IsMouseRButtonUp
+// Description:
+//   Returns true if the right mouse button is currently up.
+// -----------------------------------------------------------------------------
 bool IsMouseRButtonUp() { return (m_mouseStateRaw.right == UP) ? TRUE : FALSE; }
+// -----------------------------------------------------------------------------
+// IsMouseMButtonDown
+// Description:
+//   Returns true if the middle mouse button is currently down.
+// -----------------------------------------------------------------------------
 bool IsMouseMButtonDown() { return (m_mouseStateRaw.middle == DOWN) ? TRUE : FALSE; }
+// -----------------------------------------------------------------------------
+// IsMouseMButtonUp
+// Description:
+//   Returns true if the middle mouse button is currently up.
+// -----------------------------------------------------------------------------
 bool IsMouseMButtonUp() { return (m_mouseStateRaw.middle == UP) ? TRUE : FALSE; }

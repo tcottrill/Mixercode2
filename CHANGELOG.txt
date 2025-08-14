@@ -1,0 +1,13 @@
+8/14/25
+What's new since the last release?
+1. The mixer code now runs in it's own seperate thread, freeing up resources on the main thread. 
+2. Support for both mono and stereo mixing and streaming, with a new peak limiter that doesn't penalize you for playing a single stream anymore. 
+3. Updated linear and cubic resampling code, no more memory leaks and improved overall sound quality. 
+4. Corrected volume and pan support.
+5. New Volume, frequency (non-mixer only) and panning sweeps:
+   mixer_ramp_volume(int voice, int time_ms, int endvol)
+   mixer_sweep_frequency(int voice, int time_ms, int endfreq)
+   mixer_sweep_pan(int voice, int time_ms, int endpan)
+   just like in the old allegro engine. 
+6. Support for non integer audio rates, like 29.97 so it can be used as a back end for a media player. 
+7. Lots of general bugfixes.

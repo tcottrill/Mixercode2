@@ -1,3 +1,104 @@
+/* =============================================================================
+ * File: iniFile.cpp
+ * Component: Minimal INI reader/writer with comment preservation
+ *
+ * Overview
+ * --------
+ * Lightweight, dependency-free INI loader/saver that:
+ *   - Preserves original file ordering and full-line comments.
+ *   - Supports sections ([Section]), keys, and values in key=value form.
+ *   - Trims surrounding whitespace; strips inline comments (; or #) from values.
+ *   - Offers typed getters/setters (int/float/bool/string) with defaults.
+ *   - Provides both C-style (const char*) and std::string overloads.
+ *
+ * Data Model
+ * ----------
+ * - Entire file is parsed into memory as: map<section, vector<IniEntry>>.
+ * - Each IniEntry keeps {key, value, original_line, is_comment}, allowing a
+ *   round-trip save that preserves comments and unknown/invalid lines.
+ * - The active ini filename is stored globally after SetIniFile(...).
+ *
+ * Parsing Rules
+ * -------------
+ * - Section lines:        [Name]    (exactly one per line)
+ * - Key/value lines:      key=value (whitespace trimmed on both sides)
+ * - Comments (full-line): lines starting with ';' or '#'
+ * - Inline value comment: everything after first ';' or '#' in the value is removed
+ * - Keys/values containing spaces are treated as invalid and preserved as comments.
+ * - Duplicate keys: the first match in file order is returned by getters.
+ *
+ * Persistence & I/O
+ * -----------------
+ * - SetIniFile(path) loads the file into memory.
+ * - Set operations (set_config_*) update the in-memory entry, then immediately
+ *   call SaveIniFile() to write the full file back out.
+ * - Uses secure CRT helpers where applicable (strncpy_s, strcpy_s).
+ *
+ * API (see iniFile.h)
+ * -------------------
+ *   // File selection & load
+ *   void SetIniFile(const char* filePath);
+ *
+ *   // Get with defaults (C-style)
+ *   int    get_config_int  (const char* sec, const char* key, int   def);
+ *   float  get_config_float(const char* sec, const char* key, float def);
+ *   bool   get_config_bool (const char* sec, const char* key, bool  def);
+ *   char*  get_config_string(const char* sec, const char* key,
+ *                            const char* def); // caller must delete[]
+ *
+ *   // Set (C-style)
+ *   void set_config_int   (const char* sec, const char* key, int   v);
+ *   void set_config_float (const char* sec, const char* key, float v);
+ *   void set_config_bool  (const char* sec, const char* key, bool  v);
+ *   void set_config_string(const char* sec, const char* key, const char* v);
+ *
+ *   // std::string overloads (get/set)
+ *   int         get_config_int   (const std::string& sec, const std::string& key, int def);
+ *   float       get_config_float (const std::string& sec, const std::string& key, float def);
+ *   bool        get_config_bool  (const std::string& sec, const std::string& key, bool def);
+ *   std::string get_config_string(const std::string& sec, const std::string& key,
+ *                                 const std::string& def);
+ *   void set_config_int   (const std::string& sec, const std::string& key, int v);
+ *   void set_config_float (const std::string& sec, const std::string& key, float v);
+ *   void set_config_bool  (const std::string& sec, const std::string& key, bool v);
+ *   void set_config_string(const std::string& sec, const std::string& key, const std::string& v);
+ *
+ * Booleans & Numbers
+ * ------------------
+ * - Booleans accept: true/1/yes (case-insensitive) for true; otherwise false.
+ * - Floats are saved without trailing zeros (e.g., "3.5000" -> "3.5").
+ *
+ * Threading
+ * ---------
+ * - Not thread-safe. Callers should serialize access if used across threads.
+ *
+ * Limitations
+ * -----------
+ * - No multi-line values, escape sequences, or quoted strings.
+ * - Inline comments only recognized in values, not keys.
+ * - Immediate SaveIniFile() on every set may be I/O-heavy for batch edits.
+ *
+ * ---------------------------------------------------------------------------
+ * License (GPLv3):
+ *   This file is part of GameEngine Alpha.
+ *
+ *   <Project Name> is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   <Project Name> is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with GameEngine Alpha.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ *   Copyright (C) 2022-2025  Tim Cottrill
+ *   SPDX-License-Identifier: GPL-3.0-or-later
+ * ============================================================================= */
+
 // New code update 6/17/2025
 // Updated 6/22/2025 for secure functions
 // Removed dependency on legacy Windows functions. 
@@ -5,30 +106,26 @@
 // Some code below was written with the assistance of ChatGPT
 
 /*
-This is free and unencumbered software released into the public domain.
-
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non - commercial, and by any
-means.
-
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain.We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors.We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
-
-For more information, please refer to < https://unlicense.org/>
+* -------------------------------------------------------------------------- -
+*License(GPLv3) :
+    *This file is part of GameEngine Alpha.
+    *
+    *<Project Name> is free software : you can redistribute it and /or modify
+    * it under the terms of the GNU General Public License as published by
+    * the Free Software Foundation, either version 3 of the License, or
+    *(at your option) any later version.
+    *
+    *<Project Name> is distributed in the hope that it will be useful,
+    * but WITHOUT ANY WARRANTY; without even the implied warranty of
+    * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
+    * GNU General Public License for more details.
+    *
+    * You should have received a copy of the GNU General Public License
+    * along with GameEngine Alpha.If not, see < https://www.gnu.org/licenses/>.
+*
+*Copyright(C) 2012 - 2025  Tim Cottrill
+* SPDX - License - Identifier : GPL - 3.0 - or -later
+* ============================================================================ =
 */
 
 

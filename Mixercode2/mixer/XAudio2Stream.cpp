@@ -1,23 +1,87 @@
+/* =============================================================================
+ * File: XAudio2Stream.cpp
+ * Overview:
+ *   Implementation of a lightweight XAudio2 streaming backend using a small
+ *   ring of interleaved stereo S16 buffers. Handles COM initialization (when
+ *   needed), XAudio2 device/voice creation, buffer submission, and teardown.
+ *
+ * Implementation Details:
+ *   - Creates an IXAudio2 engine, a mastering voice (device-selected channel
+ *     count), and a source voice configured for stereo 16-bit PCM at the
+ *     requested sample rate.
+ *   - Allocates N ring buffers (capacity derived from sampleRate / fpsExact)
+ *     and advances one slot per update.
+ *   - xaudio2_update(ptr, bytes) submits exactly the caller-specified byte
+ *     length (must be a multiple of 4 bytes: 2 channels * 16 bits).
+ *   - Clean shutdown destroys voices, releases IXAudio2, frees buffers, and
+ *     calls CoUninitialize() if this module called CoInitializeEx() earlier.
+ *
+ * Error Handling:
+ *   - Uses an HR(...) macro to log and return on failures.
+ *   - Validates buffer byte counts and reports issues via the logging utility.
+ *
+ * Build Notes:
+ *   - Links against XAudio2 (e.g., via pragma or build system).
+ *   - Requires the XAudio2 redistributable headers/libraries and Windows SDK.
+ *
+ * Typical Usage:
+ *   // during startup:
+ *   hr = xaudio2_init(sampleRate, fpsExact);
+ *
+ *   // per audio frame:
+ *   BYTE* dst = GetNextBuffer();
+ *   // mix 'frames' stereo S16 samples into 'dst' ...
+ *   xaudio2_update(dst, frames * 4);
+ *
+ *   // shutdown:
+ *   xaudio2_stop();
+ *
+ * Limitations:
+ *   - Fixed to stereo S16 PCM by default; adjust the source voice format here
+ *     if you need a different channel layout or bit depth.
+ *
+ * ---------------------------------------------------------------------------
+  * License (GPLv3):
+ *   This file is part of GameEngine Alpha.
+ *
+ *   <Project Name> is free software: you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation, either version 3 of the License, or
+ *   (at your option) any later version.
+ *
+ *   <Project Name> is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with GameEngine Alpha.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ *   Copyright (C) 2022-2025  Tim Cottrill
+ *   SPDX-License-Identifier: GPL-3.0-or-later
+ * =============================================================================
+ */
+
 #include "XAudio2Stream.h"
 #include "mixer.h"
-#include "log.h"
-
-extern double dBToAmplitude(double db);
+#include "sys_log.h"
+#include "mixer_volume.h"  
+#include <cstring>
 
 // Error handling macro
-#define HR(hr) if (FAILED(hr)) { LOG_INFO("Error at line %d: HRESULT = 0x%08X\n", __LINE__, hr); return hr; }
+#define HR(hr) if (FAILED(hr)) { LOG_ERROR("Error at line %d: HRESULT = 0x%08X\n", __LINE__, hr); return hr; }
 
 #pragma comment(lib, "xaudio2.lib")
 
 // Global variables
 const int NUM_BUFFERS = 5;
-IXAudio2* pXAudio2 = NULL;
-IXAudio2MasteringVoice* pMasterVoice = NULL;
-IXAudio2SourceVoice* pSourceVoice = NULL;
+IXAudio2* pXAudio2 = nullptr;
+IXAudio2MasteringVoice* pMasterVoice = nullptr;
+IXAudio2SourceVoice* pSourceVoice = nullptr;
 BYTE* audioBuffers[NUM_BUFFERS];
 DWORD bufferSize;
-WAVEFORMATEXTENSIBLE wfx = {};
-
+// CoInitalize tracker
+static bool g_comInitLocal = false;
 
 // Number of audio updates per second
 int UpdatesPerSecond = 60;
@@ -27,140 +91,155 @@ int SamplesPerBuffer = SamplesPerSecond / UpdatesPerSecond;
 
 int currentBufferIndex = 0;
 
-
-void mixer_set_master_volume(int volume)
+void mixer_set_master_volume(int volumePercent)
 {
-    // Ensure volume is within the range 0-100
-    if (volume < 0) volume = 0;
-    if (volume > 100) volume = 100;
+    volumePercent = std::clamp(volumePercent, 0, 100);
+    const float amplitude = VolumePercentToLinear(volumePercent);
 
-    // Convert volume from 0-100 to decibels
-    float decibels = -96.0f + (volume / 100.0f) * 96.0f; // Assuming -96dB to 0dB range
-    float amplitude = (float) dBToAmplitude(decibels);
+    if (pMasterVoice)
+        pMasterVoice->SetVolume(amplitude);
 
-    pMasterVoice->SetVolume(amplitude);
+    // Optional: log also the dB we effectively used
+    float dB = (amplitude > 0.0f) ? 20.0f * log10f(amplitude) : -1000.0f;
+    LOG_INFO("Master volume: %d%% -> %.2f dB -> %.6f linear", volumePercent, dB, amplitude);
 }
-
 
 float mixer_get_master_volume()
 {
-    float vol;
-    pMasterVoice->GetVolume(&vol);
-    return vol;;
+    float vol = 1.0f;
+    if (pMasterVoice) {
+        pMasterVoice->GetVolume(&vol);
+    }
+   // LOG_INFO("Mixer get master volume %f", vol);
+    return vol;
 }
-
 
 BYTE* GetNextBuffer()
 {
-   // LOG_INFO("Now using buffer %d", currentBufferIndex);
     return audioBuffers[currentBufferIndex];
 }
 
-HRESULT xaudio2_init(int rate, int fps)
+HRESULT xaudio2_init(int rate, double fpsExact)
 {
     HRESULT hr;
 
-    UpdatesPerSecond = fps;
+    UpdatesPerSecond = (int)std::lround(fpsExact);   // for logs only
     SamplesPerSecond = rate;
-    BufferDurationMs = 1000 / UpdatesPerSecond;
-    SamplesPerBuffer = SamplesPerSecond / UpdatesPerSecond;
+    const int framesCapacity = (int)std::ceil((double)SamplesPerSecond / fpsExact);
+    SamplesPerBuffer = framesCapacity;               // capacity, not nominal
+    BufferDurationMs = (int)std::lround(1000.0 / fpsExact);
 
-    HR(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    HRESULT hrCI = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (hrCI == S_OK || hrCI == S_FALSE) g_comInitLocal = true;
 
-    // Initialize XAudio2
+    // Init XAudio2
     HR(XAudio2Create(&pXAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR));
-    
-    // Create a mastering voice
-    HR(pXAudio2->CreateMasteringVoice(&pMasterVoice, XAUDIO2_DEFAULT_CHANNELS, SamplesPerSecond, 0, 0));
-    
-    pMasterVoice->SetVolume(.9f);
-   
-    wfx.Format.wFormatTag = WAVE_FORMAT_PCM;
-    wfx.Format.nSamplesPerSec = SamplesPerSecond;
-    wfx.Format.nChannels = 1;
-    wfx.Format.wBitsPerSample = 16;
-    wfx.Format.nBlockAlign = wfx.Format.nChannels* wfx.Format.wBitsPerSample / 8;
-    wfx.Format.nAvgBytesPerSec =  wfx.Format.nSamplesPerSec* wfx.Format.nBlockAlign;
-    wfx.Format.cbSize =sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
-    wfx.Samples.wValidBitsPerSample = 16;
-    wfx.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
-    wfx.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
 
-    // Create the source voice
-    hr = pXAudio2->CreateSourceVoice(&pSourceVoice, &wfx.Format,  0, 1.0f,NULL,NULL,NULL);
+    // Mastering voice (let XAudio2 choose device channel count)
+    HR(pXAudio2->CreateMasteringVoice(&pMasterVoice, XAUDIO2_DEFAULT_CHANNELS, SamplesPerSecond, 0, 0));
+    //pMasterVoice->SetVolume(0.9f);
+    pMasterVoice->SetVolume(1.0f);
+
+    // We want a STEREO 16-bit PCM streaming voice
+    WAVEFORMATEX wf = {};
+    wf.wFormatTag = WAVE_FORMAT_PCM;
+    wf.nChannels = 2;                      // *** stereo ***
+    wf.nSamplesPerSec = SamplesPerSecond;
+    wf.wBitsPerSample = 16;
+    wf.nBlockAlign = wf.nChannels * wf.wBitsPerSample / 8; // 4 bytes per frame
+    wf.nAvgBytesPerSec = wf.nSamplesPerSec * wf.nBlockAlign;
+    wf.cbSize = 0;
+
+    hr = pXAudio2->CreateSourceVoice(&pSourceVoice, &wf, XAUDIO2_VOICE_NOPITCH,
+        XAUDIO2_DEFAULT_FREQ_RATIO, NULL, NULL, NULL);
     if (FAILED(hr))
     {
         LOG_INFO("Failed to create source voice: %#X\n", hr);
         return hr;
     }
 
-    LOG_INFO("Source Voice Creatred Successfully. SamplesPerBuffer here %d", SamplesPerBuffer);
-    // Allocate the audio buffers
-    bufferSize = SamplesPerBuffer * 2;
-    for (int i = 0; i < NUM_BUFFERS; ++i)
-    {
+    LOG_INFO("Source Voice Created Successfully. SamplesPerBuffer=%d (stereo frames)", SamplesPerBuffer);
+
+    // Allocate interleaved stereo buffers: frames * 4 bytes
+    bufferSize = SamplesPerBuffer * wf.nBlockAlign;  // alloc big enough for N+1 frames
+    for (int i = 0; i < NUM_BUFFERS; ++i) {
         audioBuffers[i] = new BYTE[bufferSize];
+        std::memset(audioBuffers[i], 0, bufferSize);
     }
 
-    // Start the source voice
-   HR(pSourceVoice->Start());
-   
+    HR(pSourceVoice->Start());
     currentBufferIndex = 0;
 
     return S_OK;
 }
 
-
+// -----------------------------------------------------------------------------
+// xaudio2_update
+// Submit one mixed audio frame to XAudio2. Supports variable-length (fractional)
+// frames by honoring the caller-provided byte length.
+//
+// The caller typically does:
+//   BYTE* dst = GetNextBuffer();          // pointer to ring buffer slot
+//   /* mix samples into dst ... */
+//   xaudio2_update(dst, frames * 4);      // 16-bit stereo => 4 bytes per frame
+//
+// Notes:
+// - If 'buffera' is nullptr, this function will submit the current ring slot.
+// - 'bufferLength' is in BYTES and is used exactly as provided.
+// - Advances the ring buffer index after a successful submit.
+// -----------------------------------------------------------------------------
 HRESULT xaudio2_update(BYTE* buffera, DWORD bufferLength)
 {
-    HRESULT hr;
-    //Debugging
-    XAUDIO2_VOICE_STATE VoiceState;
-    //  LOG_INFO("Bufferlength %d, Buffersize %d buffernum %d",bufferLength,bufferSize, currentBufferIndex);
-    // Submit the buffer to the source voice
-    XAUDIO2_BUFFER buffer = { 0 };
-    buffer.AudioBytes = bufferSize;
-    buffer.pContext = audioBuffers[currentBufferIndex];
-    buffer.pAudioData = audioBuffers[currentBufferIndex];
-   // buffer.Flags = XAUDIO2_END_OF_STREAM;
-  
-    hr = pSourceVoice->SubmitSourceBuffer(&buffer);
-    if (FAILED(hr))
-    {
-        LOG_ERROR("Failed to submit source buffer: %#X\n", hr);
+    if (!pSourceVoice) {
+        LOG_ERROR("xaudio2_update: source voice is null");
+        return E_FAIL;
     }
 
-    if (hr == XAUDIO2_E_DEVICE_INVALIDATED) {
-        /* !!! FIXME: possibly disconnected or temporary lost. Recover? */
-        LOG_ERROR("Lost the XAudio2 source buffer: %#X\n", hr);
+    if (bufferLength == 0) {
+        // Nothing to submit; not an error.
+        return S_OK;
     }
 
-    if (hr != S_OK) {  /* uhoh, panic! */
-
-        pSourceVoice->FlushSourceBuffers();
-        LOG_ERROR("Panic, some odd error submitting the XAudio2 source buffer: %#X\n", hr);
-        exit(1);
-              
+    if (bufferLength % 4 != 0) {
+        LOG_ERROR("xaudio2_update: bufferLength (%u) not multiple of 4", (unsigned)bufferLength);
+        return E_INVALIDARG;
     }
 
-    pSourceVoice->GetState(&VoiceState);
-    //LOG_INFO("Buffers in Queue: %d Samples Played: %d", VoiceState.BuffersQueued, VoiceState.SamplesPlayed);
-    // Move to the next buffer
+    // Choose the payload: caller-provided pointer or the current ring slot.
+    BYTE* payload = buffera ? buffera : audioBuffers[currentBufferIndex];
+
+    // If we are using the internal ring slot, ensure we never submit beyond its capacity.
+    if (!buffera && bufferLength > bufferSize) {
+        LOG_DEBUG("xaudio2_update: bufferLength (%u) > ring buffer capacity (%u); clamping",
+            (unsigned)bufferLength, (unsigned)bufferSize);
+        bufferLength = (DWORD)bufferSize;
+    }
+
+    XAUDIO2_BUFFER xb = {};
+    xb.AudioBytes = bufferLength;   // USE CALLER-PROVIDED LENGTH (BYTES)
+    xb.pAudioData = payload;        // Interleaved PCM data
+
+    HRESULT hr = pSourceVoice->SubmitSourceBuffer(&xb);
+    if (FAILED(hr)) {
+        LOG_ERROR("xaudio2_update: SubmitSourceBuffer failed, hr=0x%08X", (unsigned)hr);
+        return hr;
+    }
+
+    // Advance to next ring buffer slot for the following frame.
     currentBufferIndex = (currentBufferIndex + 1) % NUM_BUFFERS;
-   
     return hr;
 }
 
-
 void xaudio2_stop()
 {
-    // Clean up XAudio2
-    if (pSourceVoice) pSourceVoice->DestroyVoice();
-    if (pMasterVoice) pMasterVoice->DestroyVoice();
-    if (pXAudio2) pXAudio2->Release();
+    if (pSourceVoice) { pSourceVoice->DestroyVoice(); pSourceVoice = nullptr; }
+    if (pMasterVoice) { pMasterVoice->DestroyVoice(); pMasterVoice = nullptr; }
+    if (pXAudio2) { pXAudio2->Release(); pXAudio2 = nullptr; }
 
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < NUM_BUFFERS; ++i)  
     {
         delete[] audioBuffers[i];
+        audioBuffers[i] = nullptr;
     }
+    if (g_comInitLocal) { CoUninitialize(); g_comInitLocal = false; }
 }

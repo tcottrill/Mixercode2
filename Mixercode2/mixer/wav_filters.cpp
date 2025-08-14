@@ -2,7 +2,7 @@
 #include <cmath>
 #include <vector>
 
-#pragma warning( disable : 4244 )
+#pragma warning( disable : 4244)
 
 // Function to apply a high pass filter
 void highPassFilter(std::vector<int16_t>& audioSample, float cutoffFreq, float sampleRate) {

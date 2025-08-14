@@ -1,19 +1,78 @@
-//RawInput.h
-//Original code by Jay Tennant 6/30/10
-//performs initialization on raw input for testing purposes
-//to replace DXTestInput.h, which used DirectInput
-//Modified 2/12 aae:
-// Added: Allergo 4 Compatible KeyCodes
-// Added: Allegro 4 Compatible Mouse Operations
-// Added: Advanced key decoding from https://blog.molecular-matters.com/2011/09/05/properly-handling-keyboard-input/
-// This code does not currently handle multiple mice/keyboards.
-// Cleaned up and modernized 6/15/2025 - TC
-// Currently the mouse return values are doubled, that is for a special application, you will want to change:
-// *mickeyx = temp_x * 2;
-// *mickeyy = temp_y * 2;
-// to
-// *mickeyx = temp_x;
-// *mickeyy = temp_y;
+// -----------------------------------------------------------------------------
+// File: RawInput.h
+//
+// Description:
+//   Header interface for the Windows Raw Input system, providing low-level
+//   access to keyboard and mouse devices. Implements modern C++ abstractions
+//   with optional GLFW-style callback registration and Allegro-compatible
+//   input state tracking.
+//
+// Features:
+//   - Key and mouse button callbacks (GLFW-style)
+//   - Cursor tracking and adjustable mouse movement scaling
+//   - Legacy support for Allegro-style `key[]` and `mouse_b` arrays
+//
+// Requirements:
+//   - Windows XP or later
+//   - Single keyboard and mouse device supported
+//
+// Authors:
+//   - Jay Tennant (original implementation)
+//   - TC (Allegro Compatibility, Full Keyboard Key Support, Modernization and GLFW style callback system)
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Use this in the call back code.
+// Set up GLFW-style input callbacks
+//
+// MyMouseButtonCallback
+// Description:
+// TODO: Describe this function.
+// -----------------------------------------------------------------------------
+/*
+---- SetMouseButtonCallback(MyMouseButtonCallback);
+
+void MyMouseButtonCallback(int button, int action, int mods) {
+    if (mods & MMOD_SHIFT)   printf("Shift ");
+    if (mods & MMOD_CONTROL) printf("Ctrl ");
+    if (mods & MMOD_ALT)     printf("Alt ");
+    if (mods & MMOD_SUPER)   printf("Super ");
+    printf("Mouse button %d %s\n", button, action ? "pressed" : "released");
+}
+
+---- SetCursorPositionCallback(MyCursorPositionCallback);
+// -----------------------------------------------------------------------------
+// MyCursorPositionCallback
+// Description:
+// TODO: Describe this function.
+// -----------------------------------------------------------------------------
+void MyCursorPositionCallback(double xpos, double ypos) {
+    printf("Cursor moved to X: %.1f, Y: %.1f\n", xpos, ypos);
+}
+
+// -----------------------------------------------------------------------------
+// During init:
+// -----------------------------------------------------------------------------
+---- SetKeyCallback(MyKeyCallback);
+// -----------------------------------------------------------------------------
+// MyKeyCallback
+// Description:
+// TODO: Describe this function.
+// -----------------------------------------------------------------------------
+void MyKeyCallback(int key, int scancode, int action, int mods) {
+    const char* state = action ? "pressed" : "released";
+
+    printf("Key %d (scancode %d) %s", key, scancode, state);
+
+    if (mods & MMOD_SHIFT)   printf(" +Shift");
+    if (mods & MMOD_CONTROL) printf(" +Ctrl");
+    if (mods & MMOD_ALT)     printf(" +Alt");
+    if (mods & MMOD_SUPER)   printf(" +Super");
+
+    printf("\n");
+}
+*/
+
 #pragma once
 
 #include <windows.h>
@@ -57,7 +116,7 @@
 #define KEY_7                 0x37
 #define KEY_8                 0x38
 #define KEY_9                 0x39
-#define KEY_0_PAD             VK_NUMPAD0
+#define KEY_0_PAD             VK_NUMPAD0  
 #define KEY_1_PAD             VK_NUMPAD1
 #define KEY_2_PAD             VK_NUMPAD2
 #define KEY_3_PAD             VK_NUMPAD3
@@ -67,19 +126,19 @@
 #define KEY_7_PAD             VK_NUMPAD7
 #define KEY_8_PAD             VK_NUMPAD8
 #define KEY_9_PAD             VK_NUMPAD9
-#define KEY_F1                VK_F1
-#define KEY_F2                VK_F2
-#define KEY_F3                VK_F3
-#define KEY_F4                VK_F4
-#define KEY_F5                VK_F5
-#define KEY_F6                VK_F6
-#define KEY_F7                VK_F7
-#define KEY_F8                VK_F8
-#define KEY_F9                VK_F9
-#define KEY_F10               VK_F10
-#define KEY_F11               VK_F11
-#define KEY_F12               VK_F12
-#define KEY_ESC               VK_ESCAPE
+#define KEY_F1                VK_F1  
+#define KEY_F2                VK_F2  
+#define KEY_F3                VK_F3  
+#define KEY_F4                VK_F4  
+#define KEY_F5                VK_F5  
+#define KEY_F6                VK_F6  
+#define KEY_F7                VK_F7  
+#define KEY_F8                VK_F8  
+#define KEY_F9                VK_F9  
+#define KEY_F10               VK_F10  
+#define KEY_F11               VK_F11  
+#define KEY_F12               VK_F12  
+#define KEY_ESC               VK_ESCAPE  
 #define KEY_TILDE             0xc0
 #define KEY_MINUS             0xbd
 #define KEY_EQUALS            0xbb
@@ -143,28 +202,75 @@
 
 #define KEY_MAX               0xEF  //127 Not!
 
-#define toUpper(ch) ((ch >= 'a' && ch <='z') ? ch & 0x5f : ch)
-#define RI_MOUSE_HWHEEL 0x0800
 
-//Allegro compatible C style keystate buffers.
+#define toUpper(ch) ((ch >= 'a' && ch <='z') ? ch & 0x5f : ch)
+#define RI_MOUSE_HWHEEL 0x0800 
+
+// -----------------------------------------------------------------------------
+// Keyboard Callback Support
+// -----------------------------------------------------------------------------
+typedef void (*KeyCallback)(int key, int scancode, int action, int mods);
+
+// -----------------------------------------------------------------------------
+// Registers a key callback (GLFW-style)
+// -----------------------------------------------------------------------------
+void SetKeyCallback(KeyCallback callback);
+
+// -----------------------------------------------------------------------------
+// Callback Type Definitions
+// -----------------------------------------------------------------------------
+typedef void (*MouseButtonCallback)(int button, int action, int mods);
+typedef void (*CursorPositionCallback)(double xpos, double ypos);
+
+// -----------------------------------------------------------------------------
+// Set callback functions
+// -----------------------------------------------------------------------------
+void SetMouseButtonCallback(MouseButtonCallback callback);
+void SetCursorPositionCallback(CursorPositionCallback callback);
+
+// -----------------------------------------------------------------------------
+// Sets the scaling factor for raw mouse mickeys (default is 2.0)
+// -----------------------------------------------------------------------------
+void set_mouse_mickey_scale(float scale);
+
+// -----------------------------------------------------------------------------
+// Allegro compatible C style keystate buffers.
+// -----------------------------------------------------------------------------
 extern int mouse_b;
 extern unsigned char key[256];
-//registers a mouse and keyboard for raw input;
+// -----------------------------------------------------------------------------
+// Registers a mouse and keyboard for raw input;
+// Usage: if (FAILED(RawInput_Initialize(hwnd))) {
+// MessageBox(hwnd, "Failed to initialize raw input", "Error", MB_ICONERROR);
+// return -1;
+// }
+// -----------------------------------------------------------------------------
 HRESULT RawInput_Initialize(HWND hWnd);
 
-//processes WM_INPUT messages
+// -----------------------------------------------------------------------------
+// Processes WM_INPUT messages
+// -----------------------------------------------------------------------------
 LRESULT RawInput_ProcessInput(HWND hWnd, WPARAM wParam, LPARAM lParam);
 
-//keyboard state checks
+// -----------------------------------------------------------------------------
+// NEW: Shuts down the raw input worker thread gracefully
+// -----------------------------------------------------------------------------
+void RawInput_Shutdown();
+
+// -----------------------------------------------------------------------------
+// Keyboard State Queries
+// -----------------------------------------------------------------------------
 int isKeyHeld(INT vkCode);
 bool IsKeyDown(INT vkCode);
 bool IsKeyUp(INT vkCode);
 
-//summed mouse state checks/sets;
-//use as convenience, ie. keeping track of movements without needing to maintain separate data set
-//Added for Allegro Code Compatibility
-void get_mouse_win(int* mickeyx, int* mickeyy);
-void get_mouse_mickeys(int* mickeyx, int* mickeyy);
+// -----------------------------------------------------------------------------
+// Summed mouse state checks/sets;
+// Use as convenience, ie. keeping track of movements without needing to maintain separate data set
+// Added for Allegro Code Compatibility
+// -----------------------------------------------------------------------------
+void get_mouse_win(int *mickeyx, int *mickeyy);
+void get_mouse_mickeys(int *mickeyx, int *mickeyy);
 LONG GetMouseX();
 LONG GetMouseY();
 LONG GetMouseWheel();
@@ -172,12 +278,16 @@ void SetMouseX(LONG x);
 void SetMouseY(LONG y);
 void SetMouseWheel(LONG wheel);
 
-//relative mouse state changes
+// -----------------------------------------------------------------------------
+// Relative mouse state changes
+// -----------------------------------------------------------------------------
 LONG GetMouseXChange();
 LONG GetMouseYChange();
 LONG GetMouseWheelChange();
 
-//mouse button state checks
+// -----------------------------------------------------------------------------
+// Mouse button state checks
+// -----------------------------------------------------------------------------
 bool IsMouseLButtonDown();
 bool IsMouseLButtonUp();
 bool IsMouseRButtonDown();
@@ -185,4 +295,7 @@ bool IsMouseRButtonUp();
 bool IsMouseMButtonDown();
 bool IsMouseMButtonUp();
 
+// -----------------------------------------------------------------------------
+// Utilities
+// -----------------------------------------------------------------------------
 void test_clr();

@@ -3,7 +3,7 @@
 #include <Windows.h>
 #include "glew.h"
 #include "wglew.h"
-#include "log.h"
+#include "sys_log.h"
 
 extern HWND win_get_window();
 extern void ViewOrtho(int width, int height);

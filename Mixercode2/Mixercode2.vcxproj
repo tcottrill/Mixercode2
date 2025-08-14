@@ -19,41 +19,46 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="core\color_defs.h" />
     <ClInclude Include="core\fileio.h" />
+    <ClInclude Include="core\FrameLimiter.h" />
     <ClInclude Include="core\glew.h" />
     <ClInclude Include="core\iniFile.h" />
-    <ClInclude Include="core\log.h" />
     <ClInclude Include="core\miniz.h" />
     <ClInclude Include="core\mmtimer.h" />
     <ClInclude Include="core\path_helper.h" />
     <ClInclude Include="core\rawinput.h" />
+    <ClInclude Include="core\simple_texture_loader.h" />
+    <ClInclude Include="core\stb_image.h" />
+    <ClInclude Include="core\sys_log.h" />
     <ClInclude Include="core\utf8conv.h" />
     <ClInclude Include="core\wglew.h" />
     <ClInclude Include="core\winfont.h" />
     <ClInclude Include="framework.h" />
-    <ClInclude Include="mixer\dbvolume.h" />
     <ClInclude Include="mixer\emptywav.h" />
     <ClInclude Include="mixer\error_wav.h" />
     <ClInclude Include="mixer\helper_functions.h" />
     <ClInclude Include="mixer\minimp3.h" />
     <ClInclude Include="mixer\minimp3_ex.h" />
     <ClInclude Include="mixer\mixer.h" />
+    <ClInclude Include="mixer\mixer_volume.h" />
     <ClInclude Include="mixer\stb.h" />
     <ClInclude Include="mixer\stb_vorbis.h" />
     <ClInclude Include="mixer\wav_file.h" />
     <ClInclude Include="mixer\wav_filters.h" />
     <ClInclude Include="mixer\wav_resample.h" />
+    <ClInclude Include="mixer\wav_sweep.h" />
     <ClInclude Include="mixer\XAudio2Stream.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="core\fileio.cpp" />
     <ClCompile Include="core\glew.c" />
     <ClCompile Include="core\iniFile.cpp" />
-    <ClCompile Include="core\log.cpp" />
     <ClCompile Include="core\miniz.c" />
     <ClCompile Include="core\mmtimer.cpp" />
     <ClCompile Include="core\path_helper.cpp" />
     <ClCompile Include="core\rawinput.cpp" />
+    <ClCompile Include="core\sys_log.cpp" />
     <ClCompile Include="core\winfont.cpp" />
     <ClCompile Include="mixer\helper_functions.cpp" />
     <ClCompile Include="mixer\mixer.cpp" />
@@ -61,6 +66,7 @@
     <ClCompile Include="mixer\wav_file.cpp" />
     <ClCompile Include="mixer\wav_filters.cpp" />
     <ClCompile Include="mixer\wav_resample.cpp" />
+    <ClCompile Include="mixer\wav_sweep.cpp" />
     <ClCompile Include="mixer\XAudio2Stream.cpp" />
     <ClCompile Include="winmain.cpp" />
   </ItemGroup>
@@ -169,7 +175,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;GLEW_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;GLEW_STATIC;USE_VUMETER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>./;./core;./mixer;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>

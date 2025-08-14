@@ -1,5 +1,5 @@
 #include "fileio.h"
-#include "log.h"
+#include "sys_log.h"
 #include "miniz.h"
 
 #include <cstdio>

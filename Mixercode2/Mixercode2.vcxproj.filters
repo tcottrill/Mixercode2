@@ -39,9 +39,6 @@
     <ClInclude Include="mixer\XAudio2Stream.h">
       <Filter>Source Files\mixer</Filter>
     </ClInclude>
-    <ClInclude Include="mixer\dbvolume.h">
-      <Filter>Source Files\mixer</Filter>
-    </ClInclude>
     <ClInclude Include="mixer\error_wav.h">
       <Filter>Source Files\mixer</Filter>
     </ClInclude>
@@ -64,9 +61,6 @@
       <Filter>Source Files\core</Filter>
     </ClInclude>
     <ClInclude Include="core\glew.h">
-      <Filter>Source Files\core</Filter>
-    </ClInclude>
-    <ClInclude Include="core\log.h">
       <Filter>Source Files\core</Filter>
     </ClInclude>
     <ClInclude Include="core\miniz.h">
@@ -99,6 +93,27 @@
     <ClInclude Include="core\iniFile.h">
       <Filter>Source Files\core</Filter>
     </ClInclude>
+    <ClInclude Include="mixer\mixer_volume.h">
+      <Filter>Source Files\mixer</Filter>
+    </ClInclude>
+    <ClInclude Include="core\stb_image.h">
+      <Filter>Source Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\color_defs.h">
+      <Filter>Source Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\FrameLimiter.h">
+      <Filter>Source Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="mixer\wav_sweep.h">
+      <Filter>Source Files\mixer</Filter>
+    </ClInclude>
+    <ClInclude Include="core\sys_log.h">
+      <Filter>Source Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\simple_texture_loader.h">
+      <Filter>Source Files\core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="mixer\wav_filters.cpp">
@@ -128,9 +143,6 @@
     <ClCompile Include="core\glew.c">
       <Filter>Source Files\core</Filter>
     </ClCompile>
-    <ClCompile Include="core\log.cpp">
-      <Filter>Source Files\core</Filter>
-    </ClCompile>
     <ClCompile Include="core\miniz.c">
       <Filter>Source Files\core</Filter>
     </ClCompile>
@@ -150,6 +162,12 @@
       <Filter>Source Files\mixer</Filter>
     </ClCompile>
     <ClCompile Include="core\iniFile.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="mixer\wav_sweep.cpp">
+      <Filter>Source Files\mixer</Filter>
+    </ClCompile>
+    <ClCompile Include="core\sys_log.cpp">
       <Filter>Source Files\core</Filter>
     </ClCompile>
   </ItemGroup>
