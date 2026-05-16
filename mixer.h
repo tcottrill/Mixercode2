@@ -671,6 +671,44 @@ int nameToNum(const std::string& name);
 std::string numToName(int num);
 int snumlookup(int snum);
 
+// -----------------------------------------------------------------------------
+// Channel allocation
+// -----------------------------------------------------------------------------
+// Channel layout convention.
+//
+//   [0, MIXER_CHIP_STREAM_RANGE_LOW)          driver-side voice / game SFX
+//   [MIXER_CHIP_STREAM_RANGE_LOW, 17)         chip emulator streams (alloc'd)
+//   [MIXER_FIRST_RESERVED_CHANNEL, 20)        ambient FX (flyback / psnoise / hiss)
+//
+// Drivers that hardcode sample_start channels for game SFX should stay in
+// the low range. Chip emulators (sndhrdwr/) should call
+//   mixer_alloc_channel(MIXER_CHIP_STREAM_RANGE_LOW, MIXER_FIRST_RESERVED_CHANNEL)
+// when standing up their stream voices. This keeps chip-stream channels out
+// of the way of driver-side sample_start so they don't get accidentally torn
+// down by a voice-path takeover.
+constexpr int MIXER_CHIP_STREAM_RANGE_LOW   = 9;
+constexpr int MIXER_FIRST_RESERVED_CHANNEL  = 17;
+
+// Return the lowest channel index in [low, high) that is currently free
+// (no XAudio2 voice attached, no sample pinned, not in the software mix
+// list). Returns -1 if no channel in the requested range is free.
+//
+// Typical use:
+//   const int ch = mixer_alloc_channel();             // anywhere in [0, 17)
+//   const int ch = mixer_alloc_channel(0, 8);         // restrict to low half
+//   stream_start(ch, 0, 16, fps);                     // claim the channel
+//
+// The "free" check inspects actual channel state, so a channel released by
+// sample_stop / sample_stop_mixer / stream_stop is immediately available
+// again. The caller owns the returned channel until they call the matching
+// stop function (or until samples_stop_all / mixer_end fires).
+//
+// Allocation is single-threaded by contract: call from the same thread that
+// drives mixer init / driver startup. The mutex inside the function only
+// protects the registry lookup, not the gap between returning a channel and
+// the caller's subsequent stream_start / sample_start.
+int mixer_alloc_channel(int low = 0, int high = MIXER_FIRST_RESERVED_CHANNEL);
+
 unsigned char Make8bit(int16_t sample);
 short Make16bit(uint8_t sample);
 

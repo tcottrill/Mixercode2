@@ -1905,6 +1905,36 @@ int snumlookup(int snum)
 }
 
 // -----------------------------------------------------------------------------
+// mixer_alloc_channel
+// Find the lowest free channel in [low, high). "Free" = no XAudio2 voice, no
+// pinned playing_sample, not currently in the software mix list. The mutex
+// protects the lookup against concurrent state changes, but the gap between
+// returning the channel index and the caller's stream_start / sample_start
+// is unsynchronized -- callers should allocate from one thread.
+// -----------------------------------------------------------------------------
+int mixer_alloc_channel(int low, int high)
+{
+	if (low < 0) low = 0;
+	if (high > MAX_CHANNELS) high = MAX_CHANNELS;
+	if (low >= high) return -1;
+
+	std::scoped_lock lock(audioMutex);
+	for (int i = low; i < high; ++i) {
+		const auto& ch = channel[i];
+		if (ch.voice) continue;          // voice-path slot in use
+		if (ch.playing_sample) continue; // mixer-path slot in use
+		// Defensive: also exclude anything that's currently in the mix list.
+		// State flags should already imply this, but check anyway in case a
+		// channel was added to the list without a sample.
+		if (std::find(audio_list.begin(), audio_list.end(), i) != audio_list.end())
+			continue;
+		return i;
+	}
+	LOG_ERROR("mixer_alloc_channel: no free channel in [%d, %d)", low, high);
+	return -1;
+}
+
+// -----------------------------------------------------------------------------
 // save_sample_to_buffer
 // Export a loaded sample to a WAV file format buffer.
 // The caller is responsible for writing the buffer to disk using their
