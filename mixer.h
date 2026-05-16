@@ -475,7 +475,13 @@ struct CHANNEL {
 	IXAudio2SourceVoice* voice = nullptr;
 	XAUDIO2_BUFFER buffer = {};
 	SoundState state = SoundState::Stopped;
-	unsigned int pos = 0;                       // interleaved sample-element offset (frames * nChannels)
+	// Software-mixer playback position, in 32.32 fixed-point FRAMES (not interleaved samples).
+	// idx = pos_q32 >> 32 selects the source frame; the low 32 bits are the fractional offset
+	// used for linear interpolation between adjacent frames.
+	uint64_t pos_q32 = 0;
+	// 32.32 fixed-point source-frames-per-output-frame. Default 1<<32 = native rate (no
+	// rate conversion). Set by stream_set_native_rate or sample_set_freq on mixer channels.
+	uint64_t step_q32 = (1ull << 32);
 	int loaded_sample_num = -1;
 	int id = 0;
 	int looping = 0;
@@ -680,6 +686,14 @@ void stream_start(int chanid, int stream, int bits, int frame_rate);
 void stream_stop(int chanid, int stream);
 void stream_update(int chanid, short* data);
 void stream_update(int chanid, unsigned char* data);
+
+// Tell the mixer that this stream's source data is at native_rate Hz, not SYS_FREQ.
+// Resizes the channel's sample buffer to native_rate / fps frames (preserving the
+// per-update duration), updates the SAMPLE format, and sets the channel's
+// resampling step so the mix loop interpolates source -> output rate inline.
+// After this call, stream_update should be passed buffers sized for native_rate.
+// Safe to call any time after stream_start. Has no effect on non-stream channels.
+void stream_set_native_rate(int chanid, int native_rate);
 
 // Stops all samples and clears the mixer list
 void samples_stop_all();

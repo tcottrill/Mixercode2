@@ -716,55 +716,80 @@ static void mixer_update_internal()
 					continue;
 				}
 
-				// End-of-sample handling
-				if (ch.pos >= sample->sampleCount)
-				{
+				const int chCount   = sample->fx.nChannels;       // 1 or 2
+				const int bits      = sample->fx.wBitsPerSample;  // 8 or 16
+				const uint32_t totalFrames = sample->sampleCount / static_cast<uint32_t>(std::max(1, chCount));
+				if (totalFrames == 0) { ++it; continue; }
+
+				// End-of-sample / loop-wrap handling at frame granularity.
+				// step_q32 == (1<<32) is the native-rate fast path; non-unity step means
+				// the channel is doing inline resampling (e.g. 96k chip -> 44.1k system).
+				uint32_t idx = static_cast<uint32_t>(ch.pos_q32 >> 32);
+				if (idx >= totalFrames) {
 					if (!ch.looping) {
 						ch.state = SoundState::Stopped;
 						ch.isPlaying = false;
-						ch.playing_sample.reset(); // release reference; SAMPLE freed if registry slot is also null
+						ch.playing_sample.reset();
 						it = audio_list.erase(it);
 						continue;
 					}
-					ch.pos = 0;
+					// Wrap: keep fractional remainder, subtract one buffer's worth.
+					ch.pos_q32 -= static_cast<uint64_t>(totalFrames) << 32;
+					idx = static_cast<uint32_t>(ch.pos_q32 >> 32);
+					if (idx >= totalFrames) {
+						// Defensive: only triggers if step_q32 is absurdly large.
+						ch.pos_q32 = 0;
+						idx = 0;
+					}
 				}
 
-				// Decode one frame (mono or stereo)
-				int32_t sL = 0, sR = 0;
-				const int chCount = sample->fx.nChannels;     // 1 or 2
-				const int bits = sample->fx.wBitsPerSample; // 8 or 16
+				// Pick the second interp endpoint. For streams the buffer is overwritten
+				// every frame by stream_update, so the natural continuation across the
+				// buffer boundary (idx == totalFrames - 1) lives in a buffer we don't have
+				// yet -- sample-and-hold avoids click without needing 1-frame lookahead.
+				// For looping WAV samples the seam IS the loop point, so wrap to frame 0.
+				const bool isStream = (ch.stream_type == static_cast<int>(SoundState::Stream));
+				uint32_t nidx;
+				if (idx + 1 < totalFrames)        nidx = idx + 1;
+				else if (isStream)                nidx = idx;
+				else if (ch.looping)              nidx = 0;
+				else                              nidx = idx;
 
-				if (bits == 16 && sample->data16)
-				{
+				const int32_t frac_q15 = static_cast<int32_t>((ch.pos_q32 >> 17) & 0x7FFF);
+
+				// Read the two frames that bracket the fractional position.
+				int32_t aL = 0, aR = 0, bL = 0, bR = 0;
+				if (bits == 16 && sample->data16) {
+					const int16_t* d = sample->data16.get();
 					if (chCount == 2) {
-						if (ch.pos + 1 < sample->sampleCount) {
-							sL = static_cast<int32_t>(sample->data16[ch.pos + 0]);
-							sR = static_cast<int32_t>(sample->data16[ch.pos + 1]);
-						}
-					}
-					else {
-						const int32_t s = static_cast<int32_t>(sample->data16[ch.pos]);
-						sL = sR = s;
+						aL = d[idx  * 2 + 0];
+						aR = d[idx  * 2 + 1];
+						bL = d[nidx * 2 + 0];
+						bR = d[nidx * 2 + 1];
+					} else {
+						aL = aR = d[idx];
+						bL = bR = d[nidx];
 					}
 				}
-				else if (bits == 8 && sample->data8)
-				{
+				else if (bits == 8 && sample->data8) {
+					const uint8_t* d = sample->data8.get();
 					if (chCount == 2) {
-						sL = static_cast<int32_t>((sample->data8[ch.pos + 0] - 128) << 8);
-						sR = static_cast<int32_t>((sample->data8[ch.pos + 1] - 128) << 8);
-					}
-					else {
-						const int32_t s = static_cast<int32_t>((sample->data8[ch.pos] - 128) << 8);
-						sL = sR = s;
+						aL = (static_cast<int32_t>(d[idx  * 2 + 0]) - 128) << 8;
+						aR = (static_cast<int32_t>(d[idx  * 2 + 1]) - 128) << 8;
+						bL = (static_cast<int32_t>(d[nidx * 2 + 0]) - 128) << 8;
+						bR = (static_cast<int32_t>(d[nidx * 2 + 1]) - 128) << 8;
+					} else {
+						aL = aR = (static_cast<int32_t>(d[idx])  - 128) << 8;
+						bL = bR = (static_cast<int32_t>(d[nidx]) - 128) << 8;
 					}
 				}
 
-				// Channel gain
+				// Linear interpolation in Q15. Provably in int16 range, no saturate needed.
+				// When step_q32 == 1<<32, frac_q15 is always 0 and this collapses to sL=aL.
+				const int32_t sL = aL + (((bL - aL) * frac_q15) >> 15);
+				const int32_t sR = aR + (((bR - aR) * frac_q15) >> 15);
+
 				const float vol = static_cast<float>(ch.vol);
-
-				// Pan gains:
-				// - Mono: ignore pan entirely (center) -> gL=gR=1
-				// - Stereo: equal-power balance
 				float gL = 1.0f, gR = 1.0f;
 				if (chCount == 2) {
 					mixer_pan_gains(ch.pan, gL, gR);
@@ -773,7 +798,7 @@ static void mixer_update_internal()
 				fmixL += static_cast<int32_t>(sL * vol * gL);
 				fmixR += static_cast<int32_t>(sR * vol * gR);
 
-				ch.pos += chCount;
+				ch.pos_q32 += ch.step_q32;
 				++it;
 			}
 		}
@@ -988,7 +1013,7 @@ void sample_stop(int chanid)
 		ch.isPlaying = false;
 		ch.state = SoundState::Stopped;
 		ch.looping = 0;
-		ch.pos = 0;
+		ch.pos_q32 = 0;
 	}
 	ch.is_positional = false;
 	// Release sample reference for both paths so sample_remove can free memory.
@@ -1082,8 +1107,7 @@ int sample_get_position(int chanid)
 	auto& ch = channel[chanid];
 	if (!ch.playing_sample) return 0;
 
-	const int nch = std::max<int>(1, ch.playing_sample->fx.nChannels);
-	return static_cast<int>(ch.pos / nch);
+	return static_cast<int>(ch.pos_q32 >> 32);
 }
 
 // -----------------------------------------------------------------------------
@@ -1137,9 +1161,10 @@ int sample_get_volume_percent(int chanid)
 // -----------------------------------------------------------------------------
 // sample_set_position
 // Seek a channel to pos_frames. Software-mixer path: clamped to sample length
-// and applied directly to ch.pos. Voice path: XAudio2 has no SetPosition;
-// seeking requires Stop+FlushSourceBuffers+resubmit-with-PlayBegin which we
-// don't do today, so the voice path is a logged no-op. Tell me if you need it.
+// and written into pos_q32 (the 32.32 fixed-point position used by the mix loop).
+// Voice path: XAudio2 has no SetPosition; seeking requires Stop+FlushSourceBuffers
+// +resubmit-with-PlayBegin which we don't do today, so the voice path is a logged
+// no-op. Tell me if you need it.
 // -----------------------------------------------------------------------------
 void sample_set_position(int chanid, int pos_frames)
 {
@@ -1165,7 +1190,7 @@ void sample_set_position(int chanid, int pos_frames)
 	if (pos_frames < 0) pos_frames = 0;
 	if (static_cast<uint32_t>(pos_frames) >= total_frames) pos_frames = static_cast<int>(total_frames > 0 ? total_frames - 1 : 0);
 
-	ch.pos = static_cast<uint32_t>(pos_frames) * static_cast<uint32_t>(nch);
+	ch.pos_q32 = static_cast<uint64_t>(pos_frames) << 32;
 }
 
 int sample_get_freq(int chanid)
@@ -1179,11 +1204,19 @@ int sample_get_freq(int chanid)
 
 void sample_set_freq(int chanid, int freq)
 {
+	if (chanid < 0 || chanid >= MAX_CHANNELS || freq <= 0) return;
 	std::scoped_lock lock(audioMutex);
 	auto& ch = channel[chanid];
-	if (ch.voice && ch.frequency > 0 && freq > 0) {
-		float ratio = static_cast<float>(freq) / static_cast<float>(ch.frequency);
-		ch.voice->SetFrequencyRatio(ratio);
+	if (ch.voice) {
+		if (ch.frequency > 0) {
+			float ratio = static_cast<float>(freq) / static_cast<float>(ch.frequency);
+			ch.voice->SetFrequencyRatio(ratio);
+		}
+	} else if (SYS_FREQ > 0) {
+		// Mixer path: step is "source frames per output frame". Setting freq = F
+		// means "consume F source frames per second of output", so the mix loop
+		// resamples F -> SYS_FREQ inline.
+		ch.step_q32 = (static_cast<uint64_t>(freq) << 32) / static_cast<uint64_t>(SYS_FREQ);
 	}
 }
 
@@ -1418,7 +1451,14 @@ void sample_start_mixer(int chanid, int samplenum, int loop)
 	ch.loaded_sample_num = samplenum;
 	ch.playing_sample = lsamples[samplenum]; // pin lifetime; survives sample_remove
 	ch.looping = loop;
-	ch.pos = 0;
+	ch.pos_q32 = 0;
+	// step_q32 reflects sample-native-rate -> output-rate. For samples that were
+	// resampled to SYS_FREQ at load (the default), this is exactly 1<<32 and the
+	// mix loop's interp collapses to plain reads.
+	const uint32_t native = ch.playing_sample->fx.nSamplesPerSec;
+	ch.step_q32 = (native > 0 && SYS_FREQ > 0)
+		? (static_cast<uint64_t>(native) << 32) / static_cast<uint64_t>(SYS_FREQ)
+		: (1ull << 32);
 
 	audio_list.push_back(chanid);
 	LOG_INFO("Playing Sample #%d :%s", samplenum, ch.playing_sample->name.c_str());
@@ -1434,7 +1474,7 @@ void sample_stop_mixer(int chanid)
 	std::scoped_lock lock(audioMutex);
 	channel[chanid].state = SoundState::Stopped;
 	channel[chanid].looping = 0;
-	channel[chanid].pos = 0;
+	channel[chanid].pos_q32 = 0;
 	channel[chanid].playing_sample.reset();
 	audio_list.remove(chanid);
 }
@@ -1505,7 +1545,10 @@ void stream_start(int chanid, int /*stream*/, int bits, int frame_rate, bool ste
 	ch.state = SoundState::Playing;
 	ch.loaded_sample_num = stream_sample;
 	ch.looping = 1;
-	ch.pos = 0;
+	ch.pos_q32 = 0;
+	// Default step: buffer is at SYS_FREQ, mixer reads at SYS_FREQ -> no rate conversion.
+	// Call stream_set_native_rate to override (e.g. for a 96 kHz chip emulator).
+	ch.step_q32 = (1ull << 32);
 	ch.stream_type = static_cast<int>(SoundState::Stream);
 
 	audio_list.push_back(chanid);
@@ -1527,7 +1570,8 @@ void stream_stop(int chanid, int /*stream*/)
 	ch.state = SoundState::Stopped;
 	ch.loaded_sample_num = -1;
 	ch.looping = 0;
-	ch.pos = 0;
+	ch.pos_q32 = 0;
+	ch.step_q32 = (1ull << 32);
 	ch.playing_sample.reset();
 
 	audio_list.remove(chanid);
@@ -1552,13 +1596,77 @@ void stream_update(int chanid, unsigned char* data)
 	std::scoped_lock lock(audioMutex);
 	auto& ch = channel[chanid];
 	if (ch.state == SoundState::Playing &&
-	    ch.loaded_sample_num >= 0 && 
+	    ch.loaded_sample_num >= 0 &&
 	    ch.loaded_sample_num < static_cast<int>(lsamples.size())) {
 		auto& sample = lsamples[ch.loaded_sample_num];
 		if (sample && sample->data8) {
 			std::memcpy(sample->data8.get(), data, sample->dataSize);
 		}
 	}
+}
+
+// -----------------------------------------------------------------------------
+// stream_set_native_rate
+// Resize a stream's buffer to native_rate frames-per-second (instead of SYS_FREQ)
+// and set the channel's resampling step so the mix loop does source->output rate
+// conversion inline. New buffer holds the same duration (1 / fps seconds) as
+// before, just at the new rate.
+//
+// After this call, the chip emulator should write native_rate / fps frames per
+// stream_update, and the mixer will interpolate them to SYS_FREQ on the fly.
+// -----------------------------------------------------------------------------
+void stream_set_native_rate(int chanid, int native_rate)
+{
+	if (chanid < 0 || chanid >= MAX_CHANNELS || native_rate <= 0 || SYS_FREQ <= 0) {
+		LOG_ERROR("stream_set_native_rate: invalid args (chanid=%d, rate=%d)", chanid, native_rate);
+		return;
+	}
+	std::scoped_lock lock(audioMutex);
+
+	auto& ch = channel[chanid];
+	if (ch.stream_type != static_cast<int>(SoundState::Stream) || !ch.playing_sample) {
+		LOG_ERROR("stream_set_native_rate: channel %d is not a stream", chanid);
+		return;
+	}
+
+	auto& sample = ch.playing_sample;
+	const uint32_t channels = std::max<uint32_t>(1, sample->fx.nChannels);
+	const uint32_t old_rate = std::max<uint32_t>(1, sample->fx.nSamplesPerSec);
+	const uint32_t old_frames = sample->sampleCount / channels;
+
+	// Preserve duration: new_frames / native_rate == old_frames / old_rate.
+	uint32_t new_frames = static_cast<uint32_t>(
+		(static_cast<uint64_t>(old_frames) * static_cast<uint64_t>(native_rate)) / old_rate);
+	if (new_frames == 0) new_frames = 1;
+
+	const uint32_t bits = sample->fx.wBitsPerSample;
+	const uint32_t new_sample_count = new_frames * channels;
+	const uint32_t new_data_size = new_sample_count * (bits / 8);
+
+	// Reallocate the PCM buffer at the new size.
+	if (bits == 8) {
+		sample->data8 = std::make_unique<uint8_t[]>(new_data_size);
+		std::memset(sample->data8.get(), 0, new_data_size);
+		sample->buffer = sample->data8.get();
+		sample->data16.reset();
+	} else {
+		sample->data16 = std::make_unique<int16_t[]>(new_sample_count);
+		std::memset(sample->data16.get(), 0, new_data_size);
+		sample->buffer = sample->data16.get();
+		sample->data8.reset();
+	}
+
+	sample->fx.nSamplesPerSec  = static_cast<DWORD>(native_rate);
+	sample->fx.nAvgBytesPerSec = sample->fx.nSamplesPerSec * sample->fx.nBlockAlign;
+	sample->sampleCount = new_sample_count;
+	sample->dataSize    = new_data_size;
+
+	// Reset position and set the resampling step (source frames per output frame).
+	ch.pos_q32  = 0;
+	ch.step_q32 = (static_cast<uint64_t>(native_rate) << 32) / static_cast<uint64_t>(SYS_FREQ);
+
+	LOG_INFO("stream_set_native_rate: chan %d -> %d Hz, buffer %u frames (step_q32=0x%llX)",
+		chanid, native_rate, new_frames, static_cast<unsigned long long>(ch.step_q32));
 }
 
 void restore_audio()
@@ -1808,7 +1916,8 @@ void samples_stop_all()
 		ch.isPlaying = false;
 		ch.state = SoundState::Stopped;
 		ch.looping = 0;
-		ch.pos = 0;
+		ch.pos_q32 = 0;
+		ch.step_q32 = (1ull << 32);
 		ch.playing_sample.reset();
 	}
 	audio_list.clear();
