@@ -232,8 +232,9 @@ static std::atomic<bool> audioThreadActive{ false };
 static std::atomic<int> queuedFrames{ 0 };
 static std::chrono::steady_clock::time_point lastSignalTime;
 
-// Forward declaration
+// Forward declarations
 static void mixer_update_internal();
+static void stop_channel_locked(int chanid);
 
 // 0..255 (128=center).
 // Uses "Square Root" law for constant power (volume stays consistent across pan).
