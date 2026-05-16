@@ -1461,6 +1461,11 @@ void sample_end(int chanid)
 
 void sample_start_mixer(int chanid, int samplenum, int loop)
 {
+	if (chanid < 0 || chanid >= MAX_CHANNELS) {
+		LOG_ERROR("sample_start_mixer: invalid channel %d", chanid);
+		return;
+	}
+
 	std::scoped_lock lock(audioMutex);
 
 	if (samplenum < 0 || samplenum >= static_cast<int>(lsamples.size()) ||
@@ -1470,12 +1475,20 @@ void sample_start_mixer(int chanid, int samplenum, int loop)
 		return;
 	}
 
-	if (channel[chanid].state == SoundState::Playing) {
-		LOG_ERROR("Error: Sound already playing on channel %d", chanid);
-		return;
-	}
-
 	auto& ch = channel[chanid];
+
+	// Cross-path cleanup, symmetric with sample_start: tear down any prior
+	// voice on this channel so it doesn't linger as an orphan responding to
+	// volume/pan/freq updates, and evict any prior mix-list membership so the
+	// push_back below doesn't create a duplicate.
+	if (ch.voice) {
+		ch.voice->Stop();
+		ch.voice->FlushSourceBuffers();
+		ch.voice->DestroyVoice();
+		ch.voice = nullptr;
+	}
+	audio_list.remove(chanid);
+
 	ch.state = SoundState::Playing;
 	ch.stream_type = static_cast<int>(SoundState::PCM);
 	ch.loaded_sample_num = samplenum;
@@ -1489,6 +1502,10 @@ void sample_start_mixer(int chanid, int samplenum, int loop)
 	ch.step_q32 = (native > 0 && SYS_FREQ > 0)
 		? (static_cast<uint64_t>(native) << 32) / static_cast<uint64_t>(SYS_FREQ)
 		: (1ull << 32);
+	// Voice-path positional state doesn't apply to the mixer path; clear it so
+	// a later transition back to voice path starts from a clean baseline.
+	ch.is_positional = false;
+	ch.world_x = ch.world_y = 0.0f;
 
 	audio_list.push_back(chanid);
 	LOG_INFO("Playing Sample #%d :%s", samplenum, ch.playing_sample->name.c_str());
