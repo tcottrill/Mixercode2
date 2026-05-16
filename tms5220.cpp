@@ -620,6 +620,11 @@ static void cause_interrupt(void)
 // Internal update function for syncing with CPU
 static void tms5220_update(int force)
 {
+	// Defend against any caller (legacy _w / _r entrypoints, mid-shutdown
+	// races) that reaches us after sh_stop has nulled intfa or before sh_start
+	// has set it. Also requires the emulation buffer to exist.
+	if (!intfa || !buffer) return;
+
 	int newpos = cpu_scale_by_cycles(buffer_len, intfa->clock);
 
 	// --- NEW: clamp to avoid overruns/negatives on spikes or clock changes ---
@@ -640,10 +645,20 @@ static void tms5220_update(int force)
 // Start the TMS5220 interface (MAME-style)
 int tms5220_sh_start(struct TMS5220interface* iinterface)
 {
+	if (!iinterface) {
+		LOG_ERROR("tms5220_sh_start: null interface");
+		return 1;
+	}
+	const int fps = Machine->gamedrv->fps;
+	if (iinterface->clock <= 0 || fps <= 0) {
+		LOG_ERROR("tms5220_sh_start: invalid clock=%d or fps=%d", iinterface->clock, fps);
+		return 1;
+	}
+
 	intfa = iinterface;
 
-	buffer_len = intfa->clock / 80 / Machine->gamedrv->fps;
-	emulation_rate = buffer_len * Machine->gamedrv->fps;
+	buffer_len = intfa->clock / 80 / fps;
+	emulation_rate = buffer_len * fps;
 	sample_pos = 0;
 
 	LOG_INFO("TMS5220: Emulation Rate %d, buffer len %d", emulation_rate, buffer_len);
@@ -685,6 +700,10 @@ void tms5220_sh_stop(void)
 	buffer = nullptr;
 	stream_buffer = nullptr;
 	stream_buffer_len = 0;
+	// Drop the user's interface pointer so a stray _w / _r call after stop
+	// doesn't dereference a possibly-freed struct.
+	intfa = nullptr;
+	irq_func = nullptr;
 
 #ifdef DEBUG_5220
 	if (f) { fclose(f); f = nullptr; }
@@ -696,6 +715,8 @@ void tms5220_sh_stop(void)
 // inline via its fractional mix loop (set via stream_set_native_rate).
 void tms5220_sh_update(void)
 {
+	if (!buffer) return;
+
 	if (sample_pos < buffer_len)
 		tms5220_process(buffer + sample_pos, (unsigned int)(buffer_len - sample_pos));
 	sample_pos = 0;
