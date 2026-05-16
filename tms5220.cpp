@@ -652,17 +652,19 @@ int tms5220_sh_start(struct TMS5220interface* iinterface)
 	if (!buffer)
 		return 1;
 
-	stream_buffer_len = config.samplerate / Machine->gamedrv->fps;
-	stream_buffer = (short*)malloc(stream_buffer_len * sizeof(short));
-	if (!stream_buffer)
-	{
-		LOG_INFO("TMS5220 stream buffer allocation failed");
-		free(buffer);
-		buffer = nullptr;
-		return 1;
-	}
+	// stream_buffer is no longer needed: the mixer resamples inline via
+	// stream_set_native_rate below. Keep the fields nulled for the dead
+	// cleanup branch in tms5220_sh_stop.
+	stream_buffer = nullptr;
+	stream_buffer_len = 0;
 
 	stream_start(7, 7, 16, Machine->gamedrv->fps);
+	// Tell the mixer this stream is at emulation_rate, not SYS_FREQ. The mix
+	// loop will resample to the output rate inline. Note: this drops the
+	// cubic interpolation we used to do here -- the mixer's inline path is
+	// linear, but for LPC speech the difference is below the noise floor of
+	// the synth itself.
+	stream_set_native_rate(7, emulation_rate);
 
 	tms5220_reset();
 	tms5220_set_irq(iinterface->irq);
@@ -681,8 +683,8 @@ void tms5220_sh_stop(void)
 	stream_stop(7, 7);
 	if (buffer) free(buffer);
 	buffer = nullptr;
-	if (stream_buffer) free(stream_buffer);
 	stream_buffer = nullptr;
+	stream_buffer_len = 0;
 
 #ifdef DEBUG_5220
 	if (f) { fclose(f); f = nullptr; }
@@ -690,21 +692,15 @@ void tms5220_sh_stop(void)
 }
 
 // Update the sound stream
+// Push native-rate PCM; the mixer resamples emulation_rate -> output rate
+// inline via its fractional mix loop (set via stream_set_native_rate).
 void tms5220_sh_update(void)
 {
 	if (sample_pos < buffer_len)
 		tms5220_process(buffer + sample_pos, (unsigned int)(buffer_len - sample_pos));
 	sample_pos = 0;
 
-	float resample_ratio =
-		(emulation_rate > 0) ? ((float)config.samplerate / (float)emulation_rate) : 1.0f;
-	if (!(resample_ratio > 0.0f)) resample_ratio = 1.0f;
-
-	// linear_interpolation_16(buffer, buffer_len, &stream_buffer, &stream_buffer_len, resample_ratio);
-	// (swap to cubic for higher quality)
-	cubic_interpolation_16(buffer, buffer_len, &stream_buffer, &stream_buffer_len, resample_ratio);
-
-	stream_update(7, stream_buffer);
+	stream_update(7, buffer);
 }
 
 // Legacy I/O entrypoints

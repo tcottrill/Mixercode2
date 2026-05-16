@@ -313,6 +313,10 @@ int tms36xx_sh_start(struct TMS36XXinterface* intf)
     stream_buffer_len = 0;
 
     stream_start(TMS36XX_CHANNEL, 0, 16, fps);
+    // Tell the mixer this stream is at emulation_rate, not SYS_FREQ. The mix
+    // loop now resamples inline via its fractional position, so this module
+    // pushes native-rate PCM and no longer needs linear_interpolation_16.
+    stream_set_native_rate(TMS36XX_CHANNEL, emulation_rate);
 
     LOG_INFO("TMS36XX (%s) started: rate=%d base=%d speed=%d",
         tms.subtype_name, tms.samplerate, tms.basefreq, tms.speed);
@@ -329,13 +333,7 @@ void tms36xx_sh_stop(void)
         std::free(output_buffer);
         output_buffer = nullptr;
     }
-
-    // IMPORTANT FIX: mixer.cpp uses new[] for this pointer. Use delete[] here!
-    if (stream_buffer_ptr)
-    {
-        delete[] stream_buffer_ptr;
-        stream_buffer_ptr = nullptr;
-    }
+    stream_buffer_ptr = nullptr;
     stream_buffer_len = 0;
 }
 
@@ -343,25 +341,14 @@ void tms36xx_sh_update(void)
 {
     if (!output_buffer) return;
 
-    // 1. Finish the frame
+    // Finish the current frame at emulation rate.
     if (sample_pos < buffer_len)
     {
         tms36xx_sound_update_internal(output_buffer + sample_pos, buffer_len - sample_pos);
     }
     sample_pos = 0;
 
-    // 2. Resample to system rate
-    const float ratio = (float)config.samplerate / (float)emulation_rate;
-
-    // This calls the version in mixer.cpp which handles new[] allocation automatically
-    linear_interpolation_16(
-        output_buffer,
-        buffer_len,
-        &stream_buffer_ptr,
-        &stream_buffer_len,
-        ratio
-    );
-
-    // 3. Push to mixer
-    stream_update(TMS36XX_CHANNEL, stream_buffer_ptr);
+    // Push native-rate PCM. The mixer's fractional mix loop handles rate
+    // conversion to the output rate inline (set via stream_set_native_rate).
+    stream_update(TMS36XX_CHANNEL, output_buffer);
 }

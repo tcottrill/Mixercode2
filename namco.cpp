@@ -314,6 +314,9 @@ int namco_sh_start(struct namco_interface* intf)
 
 	/* current AAE path is still mono */
 	stream_start(11, 0, 16, fps);
+	/* Tell the mixer this stream is at emulation_rate, not SYS_FREQ. The mix
+	   loop will resample to the output rate inline via its fractional position. */
+	stream_set_native_rate(11, emulation_rate);
 
 	if (stereo_enabled)
 	{
@@ -348,11 +351,7 @@ void namco_sh_stop(void)
 		output_buffer = nullptr;
 	}
 
-	if (stream_buffer)
-	{
-		delete[] stream_buffer;
-		stream_buffer = nullptr;
-	}
+	stream_buffer = nullptr;
 	stream_buffer_len = 0;
 
 	if (namco_soundregs)
@@ -376,24 +375,16 @@ void namco_sh_stop(void)
 
 // -----------------------------------------------------------------------------
 // namco_sh_update
-// Keeps your existing frame render + resample + stream_update path.
+// Generate any remaining samples for this frame and push the native-rate buffer.
+// The mixer resamples emulation_rate -> output rate inline via its fractional
+// position; we no longer need linear_interpolation_16 here.
 // -----------------------------------------------------------------------------
 void namco_sh_update(void)
 {
-	const float ratio = (float)config.samplerate / (float)emulation_rate;
-
 	namco_update(&output_buffer[sample_pos], buffer_len - sample_pos);
 	sample_pos = 0;
 
-	linear_interpolation_16(
-		output_buffer,
-		buffer_len,
-		&stream_buffer,
-		&stream_buffer_len,
-		ratio
-	);
-
-	stream_update(11, stream_buffer);
+	stream_update(11, output_buffer);
 }
 
 // -----------------------------------------------------------------------------
