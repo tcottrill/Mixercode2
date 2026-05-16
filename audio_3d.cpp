@@ -200,10 +200,13 @@ bool audio_3d_apply_2d(IXAudio2SourceVoice* voice,
 			emitter.Position.x, emitter.Position.z,
 			g_listener.Position.x, g_listener.Position.z,
 			src_channels, g_dst_channels);
+		// Matrix layout per XAudio2 / X3DAudio docs is m[SourceChannels*D + S];
+		// destination-major (one row per destination channel). Print transposed
+		// (src as outer loop, dst as inner) for human readability.
 		for (uint32_t s = 0; s < src_channels; ++s) {
 			std::printf("       src%u ->", s);
 			for (uint32_t d = 0; d < g_dst_channels; ++d) {
-				std::printf(" %s=%.3f", channel_label(d), g_matrix[s * g_dst_channels + d]);
+				std::printf(" %s=%.3f", channel_label(d), g_matrix[src_channels * d + s]);
 			}
 			std::printf("\n");
 		}

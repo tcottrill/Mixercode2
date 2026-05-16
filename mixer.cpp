@@ -1083,35 +1083,35 @@ static void SetPan(IXAudio2SourceVoice* voice, int panByte)
 	const UINT32 dstCh = g_backend ? g_backend->OutputChannelCount() : 2;
 	if (dstCh == 0 || srcCh == 0) return;
 
-	// Row-major: matrix[srcIdx * dstCh + dstIdx]
+	// XAudio2 SetOutputMatrix layout (per official docs): the level sent from
+	// source channel S to destination channel D lives at
+	//   pLevelMatrix[SourceChannels * D + S]
+	// i.e. the matrix is laid out destination-major (one row per destination
+	// channel, columns are source channels). This is the OPPOSITE of what the
+	// "row-major rows=source" reading would suggest; getting it wrong puts
+	// stereo R onto the LFE channel and produces silence with no error.
 	std::vector<float> m(srcCh * dstCh, 0.0f);
 
 	if (srcCh == 1) {
-		// Mono -> front L/R (center), pan ignored
-		m[0 * dstCh + 0] = 1.0f;
-		if (dstCh >= 2) m[0 * dstCh + 1] = 1.0f;
+		// Mono -> front L + front R (center, pan ignored).
+		// For srcCh=1 the formula collapses to m[D], so this works regardless
+		// of which interpretation you assumed.
+		m[srcCh * 0 + 0] = 1.0f;                  // src 0 -> dst 0 (FL)
+		if (dstCh >= 2) m[srcCh * 1 + 0] = 1.0f;  // src 0 -> dst 1 (FR)
 	}
 	else if (srcCh == 2 && dstCh >= 2) {
-		// Stereo source on a multi-channel master (5.1/7.1/Atmos surface).
-		// The "obvious" routing -- L only to channel 0 (FL), R only to channel 1
-		// (FR), everything else 0 -- is what the docs say should work and
-		// SetOutputMatrix returns S_OK on it, but in practice this produces
-		// silence on at least Win11 5.1 endpoints with mask 0x60F (verified by
-		// experiment). Broadcasting L and R to every destination channel (the
-		// fallback XAudio2 uses when SetOutputMatrix is rejected) plays cleanly.
-		// We lose strict stereo separation on >2-channel endpoints but no audio
-		// goes missing. Mono routing above is unaffected.
+		// Stereo balance to front L / front R using equal-power gains.
 		float gL = 1.0f, gR = 1.0f;
 		mixer_pan_gains(panByte, gL, gR);
-		for (UINT32 d = 0; d < dstCh; ++d) {
-			m[0 * dstCh + d] = gL;
-			m[1 * dstCh + d] = gR;
-		}
+		m[srcCh * 0 + 0] = gL; // src 0 (L) -> dst 0 (FL)
+		m[srcCh * 1 + 1] = gR; // src 1 (R) -> dst 1 (FR)
 	}
 	else {
-		// Unusual source layout - identity over min(src, dst), rest silent
+		// Unusual source layout: identity over min(src, dst), rest silent.
 		const UINT32 minCh = (srcCh < dstCh) ? srcCh : dstCh;
-		for (UINT32 c = 0; c < minCh; ++c) m[c * dstCh + c] = 1.0f;
+		for (UINT32 c = 0; c < minCh; ++c) {
+			m[srcCh * c + c] = 1.0f;
+		}
 	}
 
 	voice->SetOutputMatrix(nullptr, srcCh, dstCh, m.data());
