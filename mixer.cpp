@@ -1534,69 +1534,88 @@ void sample_set_volume_mixer(int chanid, int volume255)
 	sample_set_volume(chanid, volume255);
 }
 
-// Stereo
+// Start a stream on the given channel. bits must be 8 or 16; frame_rate > 0;
+// stereo selects mono (false) or interleaved stereo (true) buffer layout.
 void stream_start(int chanid, int /*stream*/, int bits, int frame_rate, bool stereo)
 {
-	// FIX: Acquire lock for the entire operation
-	std::scoped_lock lock(audioMutex);
-	
-	auto& ch = channel[chanid];
-	if (ch.state == SoundState::Playing) {
-		LOG_ERROR("Error: Stream already playing on channel %d", chanid);
+	if (chanid < 0 || chanid >= MAX_CHANNELS) {
+		LOG_ERROR("stream_start: invalid channel %d", chanid);
 		return;
 	}
-	
-	// len = frames per update; create_sample stores counts properly for 1 or 2 channels
-	// FIX: create_sample_unlocked to avoid recursive lock (or release lock temporarily)
-	// For now, we'll create the sample before taking the lock
-	int stream_sample = -1;
-	{
-		// Temporarily release the lock to call create_sample which takes its own lock
-		// Actually, we need to refactor this. Let's inline the sample creation.
-		auto sample = std::make_shared<SAMPLE>();
-		sample->num = ++sound_id;
-		sample->name = "STREAM" + std::to_string(sample->num);
-		
-		LOG_INFO("Creating Audio Sample with name %s and sound id %d", sample->name.c_str(), sample->num);
-		
-		sample->fx.wFormatTag = WAVE_FORMAT_PCM;
-		sample->fx.nChannels = stereo ? 2 : 1;
-		sample->fx.nSamplesPerSec = SYS_FREQ;
-		sample->fx.wBitsPerSample = static_cast<WORD>(bits);
-		sample->fx.nBlockAlign = static_cast<WORD>(sample->fx.nChannels * (bits / 8));
-		sample->fx.nAvgBytesPerSec = sample->fx.nSamplesPerSec * sample->fx.nBlockAlign;
-		sample->fx.cbSize = 0;
-		sample->state = SoundState::Loaded;
-		
-		int len = SYS_FREQ / frame_rate;
-		const uint32_t channels = sample->fx.nChannels;
-		sample->sampleCount = static_cast<uint32_t>(len) * channels;
-		sample->dataSize = sample->sampleCount * (bits / 8);
-		
-		if (bits == 8) {
-			sample->data8 = std::make_unique<uint8_t[]>(sample->dataSize);
-			std::memset(sample->data8.get(), 0, sample->dataSize);
-			sample->buffer = sample->data8.get();
-		}
-		else {
-			sample->data16 = std::make_unique<int16_t[]>(sample->sampleCount);
-			std::memset(sample->data16.get(), 0, sample->dataSize);
-			sample->buffer = sample->data16.get();
-		}
-		
-		stream_sample = sample->num;
-		lsamples.push_back(sample);
-		ch.playing_sample = sample; // pin lifetime for the stream's owned buffer
+	if (frame_rate <= 0) {
+		LOG_ERROR("stream_start: invalid frame_rate %d (must be > 0)", frame_rate);
+		return;
+	}
+	if (bits != 8 && bits != 16) {
+		LOG_ERROR("stream_start: unsupported bits=%d (only 8 or 16 supported)", bits);
+		return;
 	}
 
-	ch.state = SoundState::Playing;
-	ch.loaded_sample_num = stream_sample;
-	ch.looping = 1;
-	ch.pos_q32 = 0;
+	std::scoped_lock lock(audioMutex);
+
+	auto& ch = channel[chanid];
+
+	// Cross-path cleanup, symmetric with sample_start / sample_start_mixer:
+	// tear down any prior voice so it doesn't linger as an orphan responding
+	// to volume/pan/freq updates, and evict any prior mix-list membership so
+	// the push_back below doesn't create a duplicate.
+	if (ch.voice) {
+		ch.voice->Stop();
+		ch.voice->FlushSourceBuffers();
+		ch.voice->DestroyVoice();
+		ch.voice = nullptr;
+	}
+	audio_list.remove(chanid);
+
+	// Build the per-frame stream SAMPLE inline -- create_sample takes its own
+	// lock so we can't call it from inside this scope without re-entering the
+	// mutex. The SAMPLE owns the buffer that stream_update writes into each
+	// frame; the channel pins its lifetime via playing_sample.
+	auto sample = std::make_shared<SAMPLE>();
+	sample->num  = ++sound_id;
+	sample->name = "STREAM" + std::to_string(sample->num);
+
+	LOG_INFO("Creating Audio Sample with name %s and sound id %d", sample->name.c_str(), sample->num);
+
+	sample->fx.wFormatTag     = WAVE_FORMAT_PCM;
+	sample->fx.nChannels      = stereo ? 2 : 1;
+	sample->fx.nSamplesPerSec = SYS_FREQ;
+	sample->fx.wBitsPerSample = static_cast<WORD>(bits);
+	sample->fx.nBlockAlign    = static_cast<WORD>(sample->fx.nChannels * (bits / 8));
+	sample->fx.nAvgBytesPerSec = sample->fx.nSamplesPerSec * sample->fx.nBlockAlign;
+	sample->fx.cbSize         = 0;
+	sample->state             = SoundState::Loaded;
+
+	const int len = SYS_FREQ / frame_rate;
+	const uint32_t channels = sample->fx.nChannels;
+	sample->sampleCount = static_cast<uint32_t>(len) * channels;
+	sample->dataSize    = sample->sampleCount * (bits / 8);
+
+	if (bits == 8) {
+		sample->data8 = std::make_unique<uint8_t[]>(sample->dataSize);
+		std::memset(sample->data8.get(), 0, sample->dataSize);
+		sample->buffer = sample->data8.get();
+	} else {
+		sample->data16 = std::make_unique<int16_t[]>(sample->sampleCount);
+		std::memset(sample->data16.get(), 0, sample->dataSize);
+		sample->buffer = sample->data16.get();
+	}
+
+	lsamples.push_back(sample);
+	ch.playing_sample = sample;
+
+	ch.state             = SoundState::Playing;
+	ch.loaded_sample_num = sample->num;
+	ch.looping           = 1;
+	ch.pos_q32           = 0;
 	// Default step: buffer is at SYS_FREQ, mixer reads at SYS_FREQ -> no rate conversion.
 	// Call stream_set_native_rate to override (e.g. for a 96 kHz chip emulator).
-	ch.step_q32 = (1ull << 32);
-	ch.stream_type = static_cast<int>(SoundState::Stream);
+	ch.step_q32          = (1ull << 32);
+	ch.stream_type       = static_cast<int>(SoundState::Stream);
+	// Voice-path positional state doesn't apply to streams; clear it so a
+	// later transition back to voice path starts from a clean baseline.
+	ch.is_positional     = false;
+	ch.world_x = ch.world_y = 0.0f;
 
 	audio_list.push_back(chanid);
 }
