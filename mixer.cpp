@@ -1371,39 +1371,40 @@ void sample_start(int chanid, int samplenum, int loop)
 
 int sample_playing(int chanid)
 {
-	// Validate channel index against your fixed array
 	if (chanid < 0 || chanid >= MAX_CHANNELS) {
 		LOG_ERROR("sample_playing: invalid channel %d", chanid);
 		return 0;
 	}
 
 	std::scoped_lock lock(audioMutex);
-
 	auto& ch = channel[chanid];
 
-	// If this channel is using an XAudio2 voice, isPlaying must reflect the real voice state.
-	// Otherwise, Sega speech queue logic (and any other queue logic) can get stuck forever.
-	if (ch.voice)
-	{
+	// Voice-path fix-up: if the XAudio2 queue has drained, the one-shot is
+	// finished. Update bookkeeping here so queue-based callers (Sega speech,
+	// etc.) don't get stuck waiting on an already-completed voice. The reap
+	// loop in mixer_update does the same fix-up; this is the defensive path
+	// for callers that poll sample_playing without driving mixer_update.
+	if (ch.voice) {
 		XAUDIO2_VOICE_STATE st{};
 		ch.voice->GetState(&st, XAUDIO2_VOICE_NOSAMPLESPLAYED);
-
-		// When no buffers are queued, the one-shot is finished.
 		if (st.BuffersQueued == 0) {
 			ch.isPlaying = false;
 			ch.state = SoundState::Stopped;
-			// XAudio2 is no longer reading the buffer; release our reference so
-			// sample_remove can actually free memory if the slot was nulled.
+			// XAudio2 is no longer reading the buffer; release our reference
+			// so sample_remove can actually free memory if the slot was nulled.
 			ch.playing_sample.reset();
-		}
-		else {
+		} else {
 			ch.isPlaying = true;
 			ch.state = SoundState::Playing;
 		}
-		return ch.isPlaying ? 1 : 0;
 	}
-	// Fallback: software-mixer path (older behavior)
-	return ch.isPlaying ? 1 : 0;
+
+	// ch.state is the canonical playback flag on both voice and mixer paths
+	// (sample_start, sample_start_mixer, stream_start all set Playing; the
+	// mix loop and end-of-sample logic transition to Stopped). ch.isPlaying
+	// is only maintained on the voice path, so reading state is the path-
+	// agnostic answer.
+	return (ch.state == SoundState::Playing) ? 1 : 0;
 }
 
 
