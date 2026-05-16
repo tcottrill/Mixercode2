@@ -350,7 +350,7 @@ void resample_wav_8(SAMPLE* sample, int new_freq)
 {
 	if (!sample || !sample->data8) return;
 
-	const int ch = std::max<int>(1, sample->fx.nChannels);
+	const int ch = (std::max<int>)(1, sample->fx.nChannels);
 	const int in_samples = static_cast<int>(sample->sampleCount);      // total samples (includes both channels)
 	const int in_frames = in_samples / ch;
 	if (in_frames <= 0 || sample->fx.nSamplesPerSec <= 0) return;
@@ -391,7 +391,7 @@ void resample_wav_16(SAMPLE* sample, int new_freq, bool use_cubic /*= true*/)
 {
 	if (!sample || !sample->data16) return;
 
-	const int ch = std::max<int>(1, sample->fx.nChannels);
+	const int ch = (std::max<int>)(1, sample->fx.nChannels);
 	const int in_samples = static_cast<int>(sample->sampleCount);      // total samples (includes both channels)
 	const int in_frames = in_samples / ch;
 	if (in_frames <= 0 || sample->fx.nSamplesPerSec <= 0) return;
@@ -723,7 +723,7 @@ static void mixer_update_internal()
 
 				const int chCount   = sample->fx.nChannels;       // 1 or 2
 				const int bits      = sample->fx.wBitsPerSample;  // 8 or 16
-				const uint32_t totalFrames = sample->sampleCount / static_cast<uint32_t>(std::max(1, chCount));
+				const uint32_t totalFrames = sample->sampleCount / static_cast<uint32_t>((std::max)(1, chCount));
 				if (totalFrames == 0) { ++it; continue; }
 
 				// End-of-sample / loop-wrap handling at frame granularity.
@@ -824,8 +824,8 @@ static void mixer_update_internal()
 	// ---- VU calculation  ----
 	constexpr float kInvFullScale = 1.0f / 32767.0f;
 	constexpr float kDecay = 0.94f;
-	float curL = std::min(1.0f, peakL * kInvFullScale);
-	float curR = std::min(1.0f, peakR * kInvFullScale);
+	float curL = (std::min)(1.0f, peakL * kInvFullScale);
+	float curR = (std::min)(1.0f, peakR * kInvFullScale);
 
 	float prevL = g_vuL.load(std::memory_order_relaxed);
 	float prevR = g_vuR.load(std::memory_order_relaxed);
@@ -1225,7 +1225,7 @@ void sample_set_position(int chanid, int pos_frames)
 		return;
 	}
 
-	const int nch = std::max<int>(1, ch.playing_sample->fx.nChannels);
+	const int nch = (std::max<int>)(1, ch.playing_sample->fx.nChannels);
 	const uint32_t total_frames = ch.playing_sample->sampleCount / static_cast<uint32_t>(nch);
 	if (pos_frames < 0) pos_frames = 0;
 	if (static_cast<uint32_t>(pos_frames) >= total_frames) pos_frames = static_cast<int>(total_frames > 0 ? total_frames - 1 : 0);
@@ -1744,8 +1744,8 @@ void stream_set_native_rate(int chanid, int native_rate)
 	}
 
 	auto& sample = ch.playing_sample;
-	const uint32_t channels = std::max<uint32_t>(1, sample->fx.nChannels);
-	const uint32_t old_rate = std::max<uint32_t>(1, sample->fx.nSamplesPerSec);
+	const uint32_t channels = (std::max<uint32_t>)(1, sample->fx.nChannels);
+	const uint32_t old_rate = (std::max<uint32_t>)(1, sample->fx.nSamplesPerSec);
 	const uint32_t old_frames = sample->sampleCount / channels;
 
 	// Preserve duration: new_frames / native_rate == old_frames / old_rate.
