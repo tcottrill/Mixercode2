@@ -1219,11 +1219,15 @@ void sample_set_position(int chanid, int pos_frames)
 
 int sample_get_freq(int chanid)
 {
-	if (channel[chanid].isPlaying)
-	{
-		return channel[chanid].frequency;
-	}
-	return 0;
+	if (chanid < 0 || chanid >= MAX_CHANNELS) return 0;
+	std::scoped_lock lock(audioMutex);
+	auto& ch = channel[chanid];
+	// Read native rate from the SAMPLE so the answer is correct on both the
+	// voice path (where ch.frequency mirrors this at start time) and the
+	// mixer/stream path (where ch.frequency is never set). Returns the BASE
+	// rate, not the currently-applied playback rate -- see header note.
+	if (!ch.playing_sample) return 0;
+	return static_cast<int>(ch.playing_sample->fx.nSamplesPerSec);
 }
 
 void sample_set_freq(int chanid, int freq)
@@ -1246,6 +1250,10 @@ void sample_set_freq(int chanid, int freq)
 
 void sample_set_pan(int chanid, int pan)
 {
+	if (chanid < 0 || chanid >= MAX_CHANNELS) {
+		LOG_ERROR("sample_set_pan: invalid channel %d", chanid);
+		return;
+	}
 	std::scoped_lock lock(audioMutex);
 	auto& ch = channel[chanid];
 	ch.pan = std::clamp(pan, 0, 255);
@@ -1257,6 +1265,7 @@ void sample_set_pan(int chanid, int pan)
 int sample_get_pan(int chanid)
 {
 	if (chanid < 0 || chanid >= MAX_CHANNELS) return 128;
+	std::scoped_lock lock(audioMutex);
 	return channel[chanid].pan;
 }
 
