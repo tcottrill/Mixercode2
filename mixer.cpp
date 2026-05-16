@@ -632,17 +632,21 @@ int mixer_init(int rate, int fps)  // <<< integer FPS
 
 	try {
 		audioThread = std::thread(audio_thread_func);
-		// FIX: Mark mixer as active after thread starts successfully
+		// Mark mixer as active after thread starts successfully.
 		audioThreadActive.store(true, std::memory_order_release);
 	}
 	catch (const std::exception& e) {
 		LOG_ERROR("mixer_init: failed to start audio thread: %s", e.what());
+		audio_3d_shutdown();
+		g_3d_inited = false;
 		g_xaudio2 = nullptr;
 		g_backend.reset();
 		return 0;
 	}
 	catch (...) {
 		LOG_ERROR("mixer_init: failed to start audio thread (unknown exception)");
+		audio_3d_shutdown();
+		g_3d_inited = false;
 		g_xaudio2 = nullptr;
 		g_backend.reset();
 		return 0;
@@ -976,23 +980,34 @@ void mixer_end()
 	audio_3d_shutdown();
 	g_3d_inited = false;
 
-	// Tear down the backend. Voice path's cached engine handle goes invalid
-	// at the same moment - clear it before reset() so any racing caller fails fast.
-	g_xaudio2 = nullptr;
-	g_backend.reset();
-	
-	// FIX: Clear resources under lock
+	// Stop all channels under the mutex BEFORE destroying the backend. When
+	// the IXAudio2 engine goes away every IXAudio2SourceVoice* it owns becomes
+	// invalid; if we left them parked in CHANNEL::voice, every subsequent
+	// sample_set_volume / sample_set_pan / sample_set_freq / sample_playing
+	// call (between mixer_end and the next mixer_init) would deref freed
+	// memory. stop_channel_locked destroys each voice cleanly, clears
+	// ch.voice and ch.playing_sample, and removes the channel from
+	// audio_list -- leaving the channel array in the same default-constructed
+	// state that mixer_init expects.
 	{
 		std::scoped_lock lock(audioMutex);
+		for (int i = 0; i < MAX_CHANNELS; ++i) {
+			stop_channel_locked(i);
+		}
+		audio_list.clear();
 		for (auto& sample : lsamples) {
 			if (sample && sample->buffer)
 				LOG_INFO("Freeing sample #%d named %s", sample->num, sample->name.c_str());
 		}
 		lsamples.clear();
-		audio_list.clear();
 	}
-	
-	// FIX: Reset sound_id so new samples start fresh
+
+	// Tear down the backend. Voice path's cached engine handle goes invalid
+	// at the same moment - clear it before reset() so any racing caller fails fast.
+	g_xaudio2 = nullptr;
+	g_backend.reset();
+
+	// Reset sound_id so new samples start fresh on next init.
 	sound_id = -1;
 	
 	LOG_INFO("mixer_end: complete");
