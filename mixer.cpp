@@ -1304,7 +1304,26 @@ void sample_start(int chanid, int samplenum, int loop)
 		return;
 	}
 
+	// Check the XAudio2 backend BEFORE tearing down any existing voice on this
+	// channel -- otherwise a post-shutdown call would leave the channel with
+	// a destroyed voice and no replacement.
+	if (!g_xaudio2) {
+		LOG_ERROR("sample_start: voice path unavailable (no XAudio2 backend)");
+		return;
+	}
+
 	auto& ch = channel[chanid];
+
+	// If this channel was previously running on the software-mixer / stream
+	// path (sample_start_mixer or stream_start) and the caller didn't call
+	// the matching stop, evict it from the mix list and clear mixer-path
+	// state -- otherwise the mix loop would keep mixing the channel via the
+	// new sample's data while XAudio2 also plays it, doubling output and
+	// corrupting state.
+	audio_list.remove(chanid);
+	ch.stream_type = 0;
+	ch.pos_q32     = 0;
+	ch.step_q32    = (1ull << 32);
 
 	// If there is an existing voice on this channel, stop and destroy it.
 	if (ch.voice) {
@@ -1316,14 +1335,15 @@ void sample_start(int chanid, int samplenum, int loop)
 
 	auto& sample = lsamples[samplenum];
 
-	if (!g_xaudio2) {
-		LOG_ERROR("sample_start: voice path unavailable (no XAudio2 backend)");
-		return;
-	}
 	// The 8.0f is really important here and required for the StarCastle drone.
 	if (FAILED(g_xaudio2->CreateSourceVoice(&ch.voice, &sample->fx, 0, 8.0f)))
 	{
 		LOG_ERROR("Failed to create voice for sample %d", sample->num);
+		// We already tore down the previous voice; leave the channel in a
+		// clean stopped state so the next sample_playing call doesn't lie.
+		ch.isPlaying = false;
+		ch.state = SoundState::Stopped;
+		ch.playing_sample.reset();
 		return;
 	}
 
@@ -1351,22 +1371,31 @@ void sample_start(int chanid, int samplenum, int loop)
 		LOG_ERROR("sample_start: SubmitSourceBuffer failed (sample=%d chan=%d)", samplenum, chanid);
 		ch.isPlaying = false;
 		ch.state = SoundState::Stopped;
+		ch.playing_sample.reset();
 		ch.voice->DestroyVoice();
 		ch.voice = nullptr;
 		return;
 	}
 
 	// We have to set the volume manually here to avoid a scoped_lock recursive error.
-	const float gain = static_cast<float>(VolumeByteToLinear(ch.volume));
+	const float gain = VolumeByteToLinear(ch.volume);
 	ch.vol = gain;
-
-	if (ch.voice) {
-		ch.voice->SetVolume(static_cast<float>(ch.vol));
-	}
+	ch.voice->SetVolume(gain);
 
 	SetPan(ch.voice, ch.pan);
 
-	HR(ch.voice->Start());
+	// Start() can fail (rare, but possible on device reset, etc.). If it does,
+	// don't leave the channel claiming to be playing -- the buffer is still
+	// queued so BuffersQueued > 0 and sample_playing would return 1 forever.
+	if (FAILED(ch.voice->Start())) {
+		LOG_ERROR("sample_start: Start failed (sample=%d chan=%d)", samplenum, chanid);
+		ch.voice->FlushSourceBuffers();
+		ch.voice->DestroyVoice();
+		ch.voice = nullptr;
+		ch.isPlaying = false;
+		ch.state = SoundState::Stopped;
+		ch.playing_sample.reset();
+	}
 }
 
 int sample_playing(int chanid)
