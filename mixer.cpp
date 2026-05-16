@@ -998,6 +998,42 @@ void mixer_end()
 	LOG_INFO("mixer_end: complete");
 }
 
+// -----------------------------------------------------------------------------
+// stop_channel_locked
+// Path-agnostic full stop of a single channel. Caller must already hold
+// audioMutex and have validated chanid in [0, MAX_CHANNELS).
+//
+// Destroys any XAudio2 voice on the channel, evicts the channel from the
+// software-mixer audio_list, resets all playback/position/rate/positional
+// bookkeeping, and releases the SAMPLE reference so sample_remove can free
+// memory. Used by sample_stop, sample_stop_mixer, stream_stop, and
+// samples_stop_all -- they all want the same cleanup regardless of which
+// start API the channel was originally launched with.
+// -----------------------------------------------------------------------------
+static void stop_channel_locked(int chanid)
+{
+	auto& ch = channel[chanid];
+
+	if (ch.voice) {
+		ch.voice->Stop();
+		ch.voice->FlushSourceBuffers();
+		ch.voice->DestroyVoice();
+		ch.voice = nullptr;
+	}
+	audio_list.remove(chanid);
+
+	ch.state             = SoundState::Stopped;
+	ch.isPlaying         = false;
+	ch.looping           = 0;
+	ch.pos_q32           = 0;
+	ch.step_q32          = (1ull << 32);
+	ch.stream_type       = 0;
+	ch.is_positional     = false;
+	ch.world_x = ch.world_y = 0.0f;
+	ch.loaded_sample_num = -1;
+	ch.playing_sample.reset();
+}
+
 void sample_stop(int chanid)
 {
 	if (chanid < 0 || chanid >= MAX_CHANNELS) {
@@ -1005,19 +1041,7 @@ void sample_stop(int chanid)
 		return;
 	}
 	std::scoped_lock lock(audioMutex);
-
-	auto& ch = channel[chanid];
-	if (ch.isPlaying && ch.voice) {
-		ch.voice->Stop();
-		ch.voice->FlushSourceBuffers();
-		ch.isPlaying = false;
-		ch.state = SoundState::Stopped;
-		ch.looping = 0;
-		ch.pos_q32 = 0;
-	}
-	ch.is_positional = false;
-	// Release sample reference for both paths so sample_remove can free memory.
-	ch.playing_sample.reset();
+	stop_channel_locked(chanid);
 }
 
 // -----------------------------------------------------------------------------
@@ -1513,17 +1537,22 @@ void sample_start_mixer(int chanid, int samplenum, int loop)
 
 void sample_end_mixer(int chanid)
 {
+	if (chanid < 0 || chanid >= MAX_CHANNELS) {
+		LOG_ERROR("sample_end_mixer: invalid channel %d", chanid);
+		return;
+	}
+	std::scoped_lock lock(audioMutex);
 	channel[chanid].looping = 0;
 }
 
 void sample_stop_mixer(int chanid)
 {
+	if (chanid < 0 || chanid >= MAX_CHANNELS) {
+		LOG_ERROR("sample_stop_mixer: invalid channel %d", chanid);
+		return;
+	}
 	std::scoped_lock lock(audioMutex);
-	channel[chanid].state = SoundState::Stopped;
-	channel[chanid].looping = 0;
-	channel[chanid].pos_q32 = 0;
-	channel[chanid].playing_sample.reset();
-	audio_list.remove(chanid);
+	stop_channel_locked(chanid);
 }
 
 // Legacy alias - the previous implementation incorrectly fed a 0..255 value
@@ -1629,18 +1658,12 @@ void stream_start(int chanid, int stream, int bits, int frame_rate)
 
 void stream_stop(int chanid, int /*stream*/)
 {
-	// FIX: Acquire lock FIRST, then modify all state atomically
+	if (chanid < 0 || chanid >= MAX_CHANNELS) {
+		LOG_ERROR("stream_stop: invalid channel %d", chanid);
+		return;
+	}
 	std::scoped_lock lock(audioMutex);
-
-	auto& ch = channel[chanid];
-	ch.state = SoundState::Stopped;
-	ch.loaded_sample_num = -1;
-	ch.looping = 0;
-	ch.pos_q32 = 0;
-	ch.step_q32 = (1ull << 32);
-	ch.playing_sample.reset();
-
-	audio_list.remove(chanid);
+	stop_channel_locked(chanid);
 }
 
 void stream_update(int chanid, short* data)
@@ -1974,18 +1997,10 @@ void samples_stop_all()
 {
 	std::scoped_lock lock(audioMutex);
 	for (int i = 0; i < MAX_CHANNELS; ++i) {
-		auto& ch = channel[i];
-		if (ch.voice) {
-			ch.voice->Stop();
-			ch.voice->FlushSourceBuffers();
-		}
-		ch.isPlaying = false;
-		ch.state = SoundState::Stopped;
-		ch.looping = 0;
-		ch.pos_q32 = 0;
-		ch.step_q32 = (1ull << 32);
-		ch.playing_sample.reset();
+		stop_channel_locked(i);
 	}
+	// stop_channel_locked removed each chanid from audio_list individually;
+	// clear() is cheap insurance against any membership drift.
 	audio_list.clear();
 }
 
