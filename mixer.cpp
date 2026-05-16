@@ -1092,11 +1092,21 @@ static void SetPan(IXAudio2SourceVoice* voice, int panByte)
 		if (dstCh >= 2) m[0 * dstCh + 1] = 1.0f;
 	}
 	else if (srcCh == 2 && dstCh >= 2) {
-		// Stereo balance to front L / front R
+		// Stereo source on a multi-channel master (5.1/7.1/Atmos surface).
+		// The "obvious" routing -- L only to channel 0 (FL), R only to channel 1
+		// (FR), everything else 0 -- is what the docs say should work and
+		// SetOutputMatrix returns S_OK on it, but in practice this produces
+		// silence on at least Win11 5.1 endpoints with mask 0x60F (verified by
+		// experiment). Broadcasting L and R to every destination channel (the
+		// fallback XAudio2 uses when SetOutputMatrix is rejected) plays cleanly.
+		// We lose strict stereo separation on >2-channel endpoints but no audio
+		// goes missing. Mono routing above is unaffected.
 		float gL = 1.0f, gR = 1.0f;
 		mixer_pan_gains(panByte, gL, gR);
-		m[0 * dstCh + 0] = gL; // src L -> dst L
-		m[1 * dstCh + 1] = gR; // src R -> dst R
+		for (UINT32 d = 0; d < dstCh; ++d) {
+			m[0 * dstCh + d] = gL;
+			m[1 * dstCh + d] = gR;
+		}
 	}
 	else {
 		// Unusual source layout - identity over min(src, dst), rest silent
