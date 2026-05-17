@@ -132,7 +132,7 @@
  *   You should have received a copy of the GNU General Public License
  *   along with GameEngine Alpha.  If not, see <https://www.gnu.org/licenses/>.
  *
- *   Copyright (C) 2022-2025  Tim Cottrill
+ *   Copyright (C) 2022-2026  Tim Cottrill
  *   SPDX-License-Identifier: GPL-3.0-or-later
  * ============================================================================= */
  // This code was updated with assistance from chatgpt

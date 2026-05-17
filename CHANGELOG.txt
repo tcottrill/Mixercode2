@@ -1,0 +1,24 @@
+8/14/25
+What's new since the last release?
+1. The mixer code now runs in it's own seperate thread, freeing up resources on the main thread. 
+2. Support for both mono and stereo mixing and streaming, with a new peak limiter that doesn't penalize you for playing a single stream anymore. 
+3. Updated linear and cubic resampling code, no more memory leaks and improved overall sound quality. 
+4. Corrected volume and pan support.
+5. New Volume, frequency (non-mixer only) and panning sweeps:
+   mixer_ramp_volume(int voice, int time_ms, int endvol)
+   mixer_sweep_frequency(int voice, int time_ms, int endfreq)
+   mixer_sweep_pan(int voice, int time_ms, int endpan)
+   just like in the old allegro engine. 
+6. Support for non integer audio rates, like 29.97 so it can be used as a back end for a media player. 
+7. Lots of general bugfixes.
+
+5/17/26
+
+So many changes, general cleanup, many bugfixes. Removed the non-integer audio rates as they caused way too many issues. I'll revisit later when necessary. 
+
+Added 3d positional audio support. This has been tested, I am still only supporting stereo samples but they can be played anywhere. 
+Tons of bugfixes and improvements. 
+Moved the Xaudio2 code out into it's own class, no more global pollution and adding the ability to start switching backends.
+Added streaming audio code for streaming music if necessary. So far I haven't used it in my game engine.
+At this point this code has been fairly well tested and is considered more or less production ready. 
+Also at some point I might support wasapi as a backend, still under consideration because it really doesn't gain me much and I have to abstract much of the xaudio2 code. 
