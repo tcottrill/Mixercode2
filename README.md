@@ -1,5 +1,7 @@
 # C++ XAudio2 Mixer and Streaming System
 
+![Mixercode2 demo](mixercode2.png)
+
 This project provides a modern C++ audio mixer and sample playback system built on **XAudio2**. It supports **WAV**, **OGG**, and **MP3** playback, mono/stereo sources, on-the-fly resampling, optional 2D positional audio, music-track crossfading, parameter sweeps (volume / pan / frequency), and safe memory management via smart pointers. It is written with high-performance game and emulator audio needs in mind.
 
 ## What's New
