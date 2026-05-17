@@ -22,7 +22,8 @@ For Windows 7 support, build with `WIN7BUILD` defined to use the `xaudio2redist`
 - **Two playback paths**: per-voice XAudio2 or software mixer
 - **8/16-bit WAV**, **OGG**, and **MP3** loading (OGG/MP3 gated by `OGG_DECODE` / `MP3_DECODE`)
 - **Mono and stereo** sources; load-time resampling (cubic 16-bit, linear 8-bit)
-- **Streaming** with inline rate conversion (`stream_set_native_rate`)
+- **On-the-fly stream resampling** with `stream_set_native_rate` - mix any source rate into the system output without per-frame caller-side conversion. Ideal for chip emulators running at native odd rates (e.g. 1.79 MHz / 16 = 111.8 kHz, or 96 kHz YM-series cores).
+- **Built-in DSP / filters**: dB gain, 1-pole RC high/low-pass, multi-pass Butterworth biquad low-pass, FIR anti-imaging post-filter, linear + Catmull-Rom cubic resamplers
 - **Parameter sweeps**: timed linear interpolation of volume, pan, and frequency
 - **2D positional audio** via `audio_3d` (`mixer_set_listener_2d`, `sample_set_world_position`)
 - **Music subsystem** with crossfade and decode-to-memory looping
@@ -87,14 +88,30 @@ sample_start_mixer(1, snd, 1);        // channel 1, looping
 
 ```cpp
 stream_start(2, 0, 16, 60, true);     // ch 2, 16-bit, 60 fps, stereo
-// stream_set_native_rate(2, 96000);   // optional: source runs at 96 kHz, mixer resamples inline
 
 // each frame:
-short pcm[44100 / 60 * 2];            // 735 stereo frames
+short pcm[44100 / 60 * 2];            // 735 stereo frames at system rate
 generate_audio(pcm);
 stream_update(2, pcm);
 mixer_update();                       // signal the audio thread
 ```
+
+#### On-the-fly native-rate streams (`stream_set_native_rate`)
+
+When the producer runs at a rate that doesn't divide evenly into the system output - a 96 kHz YM core, a 1.79 MHz / N chip stream, anything emulator-shaped - call `stream_set_native_rate` after `stream_start`. The mixer resizes the per-frame buffer to `native_rate / fps`, switches the channel into inline-resampling mode, and the mix loop does linear interpolation source -> output rate every sample.
+
+```cpp
+stream_start(3, 0, 16, 60, false);    // ch 3, 16-bit, 60 fps, mono
+stream_set_native_rate(3, 96000);     // YM-style chip at 96 kHz
+
+// each frame, hand it 96000/60 = 1600 frames at the native rate:
+short pcm[1600];
+chip_render(pcm, 1600);
+stream_update(3, pcm);
+mixer_update();
+```
+
+No caller-side resampling, no extra buffer copies, no rate-matching headaches when the chip's native clock is unrelated to 44.1 / 48 kHz. The system output rate is set once at `mixer_init`; everything else just declares its native rate and the mixer handles the conversion.
 
 ### Mixer Tick
 
@@ -166,6 +183,70 @@ sample_set_world_position(3, npc_x, npc_y);  // pan/attenuation tracks listener 
 // ... later:
 sample_clear_world_position(3);
 ```
+
+---
+
+## 🎛 Audio Filters & DSP
+
+A small grab-bag of in-place filters and resamplers ships with the mixer for offline cleanup of loaded samples or post-processing of streamed PCM. All operate on `int16_t` buffers (mono or one channel of a deinterleaved stereo pair).
+
+### Gain / level
+
+```cpp
+adjust_volume_dB(samples, num_samples, +3.0f);  // boost by 3 dB, clamps to int16
+```
+
+### 1-pole RC filters (simple, std::vector based)
+
+```cpp
+std::vector<int16_t> buf = /* ... */;
+highPassFilter(buf, 80.0f, 44100.0f);            // kill DC / rumble below 80 Hz
+lowPassFilter (buf, 8000.0f, 44100.0f);          // soften top end
+```
+
+### Butterworth biquad low-pass (steeper, multi-pass)
+
+```cpp
+biquad_lowpass_inplace_i16(
+    samples, n,
+    /*fs*/ 44100.0f,
+    /*fc*/ 5000.0f,
+    /*Q */ 0.707f,    // Butterworth
+    /*passes*/ 2      // doubles the slope (~-24 dB/oct)
+);
+```
+
+Or design the coefficients yourself and apply them however you like:
+
+```cpp
+float b0, b1, b2, a1, a2;
+design_biquad_lowpass(44100.0f, 5000.0f, 0.707f, b0, b1, b2, a1, a2);
+```
+
+### Anti-imaging post-filter (for upsampled audio)
+
+```cpp
+lowpass_postfilter_16(upsampled, n);              // light 5-tap FIR, in-place
+```
+
+### Resamplers (mono / per-channel)
+
+```cpp
+// In-place SAMPLE resamplers (used at load time too)
+resample_wav_8 (sample, 44100);                  // 8-bit linear
+resample_wav_16(sample, 44100, /*use_cubic=*/true); // 16-bit Catmull-Rom cubic
+
+// Non-allocating, caller-owned buffers
+linear_interpolation_16_into(in, in_n, out, out_n);
+cubic_interpolation_16_into (in, in_n, out, out_n);
+linear_interpolation_8      (in, out, in_n, out_n);
+
+// Allocating wrappers (caller delete[]s)
+int16_t* out; int32_t out_n;
+cubic_interpolation_16(in, in_n, &out, &out_n, 44100.0f / 22050.0f);
+```
+
+For interleaved stereo, deinterleave -> resample L and R separately -> re-interleave. The mixer's load-time path does this automatically when `force_resample=true` on `load_sample_from_buffer`.
 
 ---
 
